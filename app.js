@@ -1,6 +1,10 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import pool from './database/db.js';
+// Vyas-Backend\app.js
+import express from "express";
+import dotenv from "dotenv";
+import cookieParser from "cookie-parser";
+import cors from "cors";
+import buildingRoutes from "./routes/buildings.js";
+import userRoutes from "./routes/users.js"
 
 dotenv.config();
 
@@ -8,24 +12,18 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(cookieParser());
+app.use(cors({ credentials: true }));
 
-
-app.get('/', (req, res) => {
-  res.send('✅ Server is running!');
+app.get("/", (req, res) => {
+  res.send("✅ Server is running!");
 });
 
-// DB check route
-app.get('/db-check', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT NOW()');
-    res.send(`✅ DB connected successfully! Time: ${result.rows[0].now}`);
-  } catch (err) {
-    console.error('DB check error:', err);
-    res.status(500).send('Failed to connect to database.');
-  }
-});
+// Routes
+app.use("/building", buildingRoutes);
+app.use("/user", userRoutes);
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+  console.log(`Server running on http://localhost:${PORT}`);
 });
