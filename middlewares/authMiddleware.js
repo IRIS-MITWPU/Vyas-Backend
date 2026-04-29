@@ -1,6 +1,6 @@
 // middleware/authMiddleware.js
 import jwt from "jsonwebtoken";
-import pool from "../db.js";
+import pool from "../database/db.js";
 
 // VERIFY TOKEN MIDDLEWARE
 export const protect = async (req, res, next) => {

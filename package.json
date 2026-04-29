@@ -5,22 +5,30 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "seed": "node database/seed.js",
+    "db:schema": "psql $DATABASE_URL -f database/schema.sql"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
-    "graphql": "^16.11.0",
     "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.1",
     "nodemailer": "^7.0.9",
     "nodemon": "^3.1.10",
-    "pg": "^8.16.3"
+    "pg": "^8.16.3",
+    "redis": "^5.12.1",
+    "redlock": "^5.0.0-beta.2",
+    "socket.io": "^4.8.1",
+    "uuid": "^13.0.0",
+    "zod": "^4.3.6"
   }
 }
