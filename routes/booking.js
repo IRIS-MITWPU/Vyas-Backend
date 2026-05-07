@@ -49,10 +49,7 @@ router.post("/", protect, async (req, res) => {
 
     const lock = JSON.parse(rawLock);
 
-    if (
-      lock.token !== lockToken ||
-      lock.ownerUserId !== teacherId
-    ) {
+    if (lock.token !== lockToken || lock.ownerUserId !== teacherId) {
       return res.status(403).json({
         error: "Lock ownership mismatch",
       });
@@ -70,11 +67,12 @@ router.post("/", protect, async (req, res) => {
       `
       SELECT 1 FROM bookings
       WHERE room_id = $1
+      AND status NOT IN ('cancelled', 'denied')
         AND tstzrange(start_time, end_time) &&
             tstzrange($2::timestamptz, $3::timestamptz)
       FOR UPDATE
       `,
-      [roomId, startTime, endTime]
+      [roomId, startTime, endTime],
     );
 
     if (conflictCheck.rows.length > 0) {
@@ -115,7 +113,7 @@ router.post("/", protect, async (req, res) => {
         panel || null,
         yearCourse || null,
         isRecurring,
-      ]
+      ],
     );
 
     await client.query("COMMIT");
