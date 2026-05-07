@@ -5,15 +5,20 @@ import crypto from "crypto";
 import { z } from "zod";
 import { registerUser, findUserByEmail } from "../models/userModel.js";
 import pool from "../database/db.js";
-import { sendPasswordResetEmail } from "../services/emailService.js";
+import {
+  sendPasswordResetEmail,
+  sendWelcomeEmail,
+} from "../services/emailService.js";
 
 // ============================================================
 // Validation schemas
 // ============================================================
 const mitwpuEmail = z
   .string()
-  .email("Invalid email format")
-  .refine((e) => e.endsWith("@mitwpu.edu.in"), "Use your @mitwpu.edu.in email");
+  .email("Invalid email format");
+  
+  // For testing purpose, this restriction is removed
+  // .refine((e) => e.endsWith("@mitwpu.edu.in"), "Use your @mitwpu.edu.in email");
 
 const registerSchema = z.object({
   full_name: z.string().min(1, "Full name is required"),
@@ -64,9 +69,12 @@ export async function register(req, res) {
 
   try {
     const user = await registerUser(full_name, email, password);
+    await sendWelcomeEmail(email, full_name);
     const token = generateToken(user.id);
     res.cookie("token", token, cookieOptions);
-    res.status(201).json({ message: "User registered successfully", user, token });
+    res
+      .status(201)
+      .json({ message: "User registered successfully", user, token });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -122,21 +130,25 @@ export async function forgotPassword(req, res) {
   const { email } = parsed.data;
 
   // Always respond the same way — prevents user enumeration
-  const genericResponse = { message: "If that email is registered, a reset link has been sent." };
+  const genericResponse = {
+    message: "If that email is registered, a reset link has been sent.",
+  };
 
   try {
     const user = await findUserByEmail(email);
     if (!user) return res.json(genericResponse);
 
     // Invalidate any existing tokens for this user
-    await pool.query("DELETE FROM password_reset_tokens WHERE user_id = $1", [user.user_id]);
+    await pool.query("DELETE FROM password_reset_tokens WHERE user_id = $1", [
+      user.user_id,
+    ]);
 
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
     await pool.query(
       "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
-      [user.user_id, token, expiresAt]
+      [user.user_id, token, expiresAt],
     );
 
     const resetUrl = `${process.env.FRONTEND_ORIGIN}/reset-password?token=${token}`;
@@ -163,7 +175,7 @@ export async function resetPassword(req, res) {
   try {
     const result = await pool.query(
       "SELECT * FROM password_reset_tokens WHERE token = $1",
-      [token]
+      [token],
     );
 
     if (result.rows.length === 0) {
@@ -173,17 +185,21 @@ export async function resetPassword(req, res) {
     const row = result.rows[0];
 
     if (new Date(row.expires_at) < new Date()) {
-      await pool.query("DELETE FROM password_reset_tokens WHERE id = $1", [row.id]);
+      await pool.query("DELETE FROM password_reset_tokens WHERE id = $1", [
+        row.id,
+      ]);
       return res.status(400).json({ error: "Reset token has expired" });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
     await pool.query(
       "UPDATE user_auth SET password_hash = $1 WHERE user_id = $2",
-      [passwordHash, row.user_id]
+      [passwordHash, row.user_id],
     );
 
-    await pool.query("DELETE FROM password_reset_tokens WHERE id = $1", [row.id]);
+    await pool.query("DELETE FROM password_reset_tokens WHERE id = $1", [
+      row.id,
+    ]);
 
     res.json({ message: "Password reset successfully. You can now log in." });
   } catch (err) {

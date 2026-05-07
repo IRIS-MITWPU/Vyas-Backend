@@ -3,6 +3,7 @@ import express from "express";
 import pool from "../database/db.js";
 import { protect } from "../middlewares/authMiddleware.js";
 import redis from "../database/redis.js";
+import { sendBookingConfirmationEmail } from "../services/emailService.js";
 
 const router = express.Router();
 
@@ -66,7 +67,7 @@ router.post("/", protect, async (req, res) => {
     const conflictCheck = await client.query(
       `
       SELECT 1 FROM bookings
-      WHERE room_id = $1
+      WHERE room_id  = $1
       AND status NOT IN ('cancelled', 'denied')
         AND tstzrange(start_time, end_time) &&
             tstzrange($2::timestamptz, $3::timestamptz)
@@ -116,12 +117,43 @@ router.post("/", protect, async (req, res) => {
       ],
     );
 
+    const detailsResult = await client.query(
+      `
+    SELECT
+    p.full_name,
+    p.email,
+    r.name AS room_name
+  FROM profiles p
+  JOIN rooms r ON r.id = $1
+  WHERE p.id = $2
+
+  `,
+      [roomId, teacherId],
+    );
+
+    const details = detailsResult.rows[0];
+
     await client.query("COMMIT");
 
     // ------------------------------
     // 5️⃣ Remove Redis lock
     // ------------------------------
     await redis.del(ROOM_LOCK_KEY(roomId));
+
+    sendBookingConfirmationEmail({
+      to: details.email,
+      fullName: details.full_name,
+      roomName: details.room_name,
+      title,
+      description,
+      startTime,
+      endTime,
+      classDivision,
+      panel,
+      yearCourse,
+    }).catch((err) => {
+      console.error("Booking email failed:", err);
+    });
 
     // ------------------------------
     // 6️⃣ Notify clients

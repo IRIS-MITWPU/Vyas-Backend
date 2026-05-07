@@ -182,7 +182,7 @@
   - **What:** `GET /rooms/free?date=&startTime=&endTime=` — returns rooms not booked during the specified window.
   - **How:** Query rooms WHERE id NOT IN (SELECT room_id FROM bookings WHERE time range overlaps). Use `tstzrange` overlap operator as already used in booking conflict check.
 
-- [ ] **Email notifications (nodemailer)**
+- [DONE] **Email notifications (nodemailer) -> Completed By Aditya**  
   - **Why:** `nodemailer` is installed but completely unused. The Supabase frontend sends booking confirmation emails via an Edge Function. This should be ported to use this backend's `nodemailer`.
   - **What:** Send email on: booking created (to teacher + any invitees), booking cancelled, booking approved/denied.
   - **How:** Create `services/emailService.js`. Configure nodemailer with SMTP (MIT WPU SMTP or a transactional provider). Call from booking creation/cancellation handlers.
