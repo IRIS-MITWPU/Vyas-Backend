@@ -1,4 +1,5 @@
 # To_Do.md — Backend Production Readiness Checklist
+
 ## Project: Vyas-Backend
 
 > Updated on 30-04-2026.
@@ -6,9 +7,8 @@
 ---
 
 ## ~~ PHASE 1 — Foundation (Must exist before writing any features) ~~ Done
+
 ### 1.1 Project Structure & Conventions
-
-
 
 - [ ] **Extract Redis into a shared module**
   - **Why:** `buildings.js`, `booking.js`, and `sockets/index.js` each create their own Redis connection. That's 3–4 separate TCP connections to Redis for one server process. As routes grow this will multiply. Each top-level `await redis.connect()` also means the module crashes at load time if Redis is unreachable.
@@ -22,15 +22,20 @@
     ```
     Then in `buildings.js`, `booking.js`, remove their local `createClient` + `await redis.connect()` calls and replace with `import redis from "../database/redis.js"`.
 
-
-
 - [ ] **Add startup validation for required env vars**
   - **Why:** If `JWT_SECRET`, `DATABASE_URL`, or `REDIS_URL` are missing, the server starts without error and only fails mid-request. This is confusing in production. A fast-fail at startup with a clear message is much better.
   - **What:** At the top of `app.js`, check all required env vars exist before mounting any routes.
   - **How:**
     ```js
-    const REQUIRED_ENV = ["JWT_SECRET", "REDIS_URL", "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_NAME"];
-    const missing = REQUIRED_ENV.filter(k => !process.env[k]);
+    const REQUIRED_ENV = [
+      "JWT_SECRET",
+      "REDIS_URL",
+      "DB_USER",
+      "DB_PASSWORD",
+      "DB_HOST",
+      "DB_NAME",
+    ];
+    const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
     if (missing.length) {
       console.error("❌ Missing required env vars:", missing.join(", "));
       process.exit(1);
@@ -64,7 +69,11 @@
     app.get("/health", async (req, res) => {
       try {
         await pool.query("SELECT 1");
-        res.json({ status: "ok", timestamp: new Date().toISOString(), db: "connected" });
+        res.json({
+          status: "ok",
+          timestamp: new Date().toISOString(),
+          db: "connected",
+        });
       } catch {
         res.status(503).json({ status: "error", db: "disconnected" });
       }
@@ -78,7 +87,9 @@
     ```js
     app.use((err, req, res, next) => {
       console.error(err);
-      res.status(err.status || 500).json({ error: err.message || "Internal server error" });
+      res
+        .status(err.status || 500)
+        .json({ error: err.message || "Internal server error" });
     });
     ```
 
@@ -148,7 +159,7 @@
     - `GET /booking/admin/all` — admin: get all bookings with filters (date, room, status)
   - **How:** All routes use `protect`. `DELETE` checks `req.user.id === booking.teacher_id || req.user.is_admin`. Admin route also needs `adminOnly`.
 
-- [ ] **Building and room management endpoints (admin)**
+- [DONE] **Building and room management endpoints (admin) -> Completed By Aditya**
   - **Why:** The frontend `AdminDashboard.tsx` has UI for creating/editing/deleting buildings, floors, and rooms. Without these endpoints, the admin panel can't function.
   - **What:**
     - `POST /building` — create building (admin only)
@@ -177,12 +188,12 @@
     - `POST /timetable/:id/exception` — create a template exception
   - **How:** These match the `room_timetable_templates` and `room_timetable_template_exceptions` tables from the Supabase schema.
 
-- [ ] **Free room finder endpoint**
+- [DONE] **Free room finder endpoint -> Completed By Aditya**
   - **Why:** The frontend has a `FreeRooms.tsx` component (currently commented out) that finds rooms available at a given date/time slot. This requires a query across rooms and bookings.
   - **What:** `GET /rooms/free?date=&startTime=&endTime=` — returns rooms not booked during the specified window.
   - **How:** Query rooms WHERE id NOT IN (SELECT room_id FROM bookings WHERE time range overlaps). Use `tstzrange` overlap operator as already used in booking conflict check.
 
-- [DONE] **Email notifications (nodemailer) -> Completed By Aditya**  
+- [DONE] **Email notifications (nodemailer) -> Completed By Aditya**
   - **Why:** `nodemailer` is installed but completely unused. The Supabase frontend sends booking confirmation emails via an Edge Function. This should be ported to use this backend's `nodemailer`.
   - **What:** Send email on: booking created (to teacher + any invitees), booking cancelled, booking approved/denied.
   - **How:** Create `services/emailService.js`. Configure nodemailer with SMTP (MIT WPU SMTP or a transactional provider). Call from booking creation/cancellation handlers.
@@ -194,10 +205,10 @@
 - [ ] **Rate limiting on auth endpoints**
   - **Why:** `/user/register` and `/user/login` are currently wide open to brute-force attacks. An attacker can try unlimited password combinations per second.
   - **What:** Limit: `/user/login` → 10 requests per 15 minutes per IP. `/user/register` → 5 requests per hour per IP. General API → 100 requests per minute.
-  - **How:** `npm install express-rate-limit` → 
+  - **How:** `npm install express-rate-limit` →
     ```js
     import rateLimit from "express-rate-limit";
-    const authLimiter = rateLimit({ windowMs: 15*60*1000, max: 10 });
+    const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
     app.use("/user/login", authLimiter);
     app.use("/user/register", authLimiter);
     ```

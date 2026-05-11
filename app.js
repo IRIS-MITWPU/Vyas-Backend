@@ -73,9 +73,19 @@ app.get("/", (req, res) => {
 // ============================================================
 // Routes
 // ============================================================
-app.use("/building", buildingRoutes);
+app.use("/buildings", buildingRoutes);
 app.use("/user", userRoutes);
 app.use("/booking", bookingRoutes);
+
+// ============================================================
+// 404 handler
+// ============================================================
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: `Route not found: ${req.method} ${req.originalUrl}`,
+  });
+});
 
 // ============================================================
 // Global error handler (must be last middleware)
