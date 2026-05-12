@@ -30,7 +30,7 @@ const loginSchema = z.object({
   email: mitwpuEmail,
   password: z.string().min(1, "Password is required"),
 });
-
+  
 const forgotPasswordSchema = z.object({
   email: z.string().email("Invalid email format"),
 });

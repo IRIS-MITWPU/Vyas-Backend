@@ -1,0 +1,52 @@
+﻿require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const { createServer } = require('http');
+const { Server } = require('socket.io');
+
+const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: process.env.CORS_ORIGIN?.split(',') || '*',
+    credentials: true
+  }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Make io accessible to routes
+app.set('io', io);
+
+// Routes - Using CommonJS require
+const authRoutes = require('./routes/authRoutes');
+const bookingRoutes = require('./routes/bookingRoutes');
+const roomRoutes = require('./routes/roomRoutes');
+
+// Use routes
+app.use('/auth', authRoutes);
+app.use('/booking', bookingRoutes);
+app.use('/rooms', roomRoutes);
+
+// Health check
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', timestamp: new Date() });
+});
+
+// Socket.io connection
+try {
+  require('./sockets/bookingSocket')(io);
+} catch (error) {
+  console.log('Socket handler not found:', error.message);
+}
+
+const PORT = process.env.PORT || 3000;
+httpServer.listen(PORT, () => {
+  console.log(`✅ Server running on http://localhost:${PORT}`);
+  console.log(`📡 Health check: http://localhost:${PORT}/health`);
+  console.log(`🔑 Auth endpoint: http://localhost:${PORT}/auth/login`);
+  console.log(`📅 Bookings endpoint: http://localhost:${PORT}/booking`);
+});
