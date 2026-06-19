@@ -15,11 +15,11 @@ dotenv.config();
 // ============================================================
 const REQUIRED_ENV = [
   "JWT_SECRET",
-  "REDIS_URL",
   "DB_USER",
   "DB_PASSWORD",
   "DB_HOST",
   "DB_NAME",
+  "REDIS_URL",
 ];
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length) {
@@ -32,11 +32,20 @@ if (process.env.JWT_SECRET.length < 32) {
 }
 
 // Dynamic imports run after dotenv + validation, so env vars are guaranteed present.
-const { default: buildingRoutes } = await import("./routes/buildings.js");
-const { default: userRoutes }     = await import("./routes/users.js");
-const { default: bookingRoutes }  = await import("./routes/booking.js");
-const { default: initSockets }    = await import("./sockets/index.js");
-const { default: pool }           = await import("./database/db.js");
+const { default: buildingRoutes }  = await import("./routes/buildings.js");
+const { default: userRoutes }      = await import("./routes/users.js");
+const { default: bookingRoutes }   = await import("./routes/booking.js");
+const { default: timetableRoutes } = await import("./routes/timetable.js");
+const { default: initSockets }     = await import("./sockets/index.js");
+const { default: pool }            = await import("./database/db.js");
+
+// Email queue + Bull Board dashboard
+const { emailQueue }         = await import("./services/emailQueue.js");
+const { startEmailWorker }   = await import("./workers/emailWorker.js");
+const { createBullBoard }    = await import("@bull-board/api");
+const { BullMQAdapter }      = await import("@bull-board/api/bullMQAdapter");
+const { ExpressAdapter }     = await import("@bull-board/express");
+const { protect, adminOnly } = await import("./middlewares/authMiddleware.js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -47,12 +56,30 @@ const PORT = process.env.PORT || 3000;
 app.use(morgan("combined"));
 app.use(express.json());
 app.use(cookieParser());
+const allowedOrigins = [
+  process.env.FRONTEND_ORIGIN,
+  "http://localhost:5173",
+  "http://localhost:8080",
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
+    origin: (origin, cb) => {
+      // Allow requests with no origin (e.g. curl, Postman)
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      cb(new Error(`CORS: origin ${origin} not allowed`));
+    },
     credentials: true,
   })
 );
+
+// ============================================================
+// Bull Board — email queue dashboard (admin only)
+// ============================================================
+const bullBoardAdapter = new ExpressAdapter();
+bullBoardAdapter.setBasePath("/admin/queues");
+createBullBoard({ queues: [new BullMQAdapter(emailQueue)], serverAdapter: bullBoardAdapter });
+app.use("/admin/queues", protect, adminOnly, bullBoardAdapter.getRouter());
 
 // ============================================================
 // Health check
@@ -76,6 +103,7 @@ app.get("/", (req, res) => {
 app.use("/buildings", buildingRoutes);
 app.use("/user", userRoutes);
 app.use("/booking", bookingRoutes);
+app.use("/", timetableRoutes);        // /room/:id/timetable + /timetable/:id
 
 // ============================================================
 // 404 handler
@@ -105,4 +133,5 @@ app.set("io", io);
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  startEmailWorker();
 });

@@ -5,10 +5,7 @@ import crypto from "crypto";
 import { z } from "zod";
 import { registerUser, findUserByEmail } from "../models/userModel.js";
 import pool from "../database/db.js";
-import {
-  sendPasswordResetEmail,
-  sendWelcomeEmail,
-} from "../services/emailService.js";
+import { enqueueEmail } from "../services/emailQueue.js";
 
 // ============================================================
 // Validation schemas
@@ -69,7 +66,7 @@ export async function register(req, res) {
 
   try {
     const user = await registerUser(full_name, email, password);
-    await sendWelcomeEmail(email, full_name);
+    await enqueueEmail("welcome", { to: email, fullName: full_name });
     const token = generateToken(user.id);
     res.cookie("token", token, cookieOptions);
     res
@@ -152,7 +149,7 @@ export async function forgotPassword(req, res) {
     );
 
     const resetUrl = `${process.env.FRONTEND_ORIGIN}/reset-password?token=${token}`;
-    await sendPasswordResetEmail(email, resetUrl);
+    await enqueueEmail("password-reset", { to: email, resetUrl });
 
     res.json(genericResponse);
   } catch (err) {

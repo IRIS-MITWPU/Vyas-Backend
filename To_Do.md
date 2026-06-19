@@ -148,9 +148,9 @@
 
 ---
 
-## PHASE 3 — Core Features
+## ~~PHASE 3 — Core Features~~
 
-- [ ] **Booking management endpoints**
+- [DONE] **Booking management endpoints**
   - **Why:** Currently only `POST /booking` (create) exists. The frontend needs to display a user's bookings, allow cancellation, and admins need to see all bookings.
   - **What:**
     - `GET /booking/my` — get authenticated user's bookings (upcoming + past)
@@ -171,14 +171,14 @@
     - `DELETE /room/:id` — delete room
   - **How:** All protected with `protect + adminOnly`. Use parameterized queries.
 
-- [ ] **User management endpoints (admin)**
+- [DONE] **User management endpoints (admin)**
   - **Why:** The frontend admin dashboard allows toggling a user's admin status. Without this endpoint, admin management only works via direct DB.
   - **What:**
     - `GET /user/all` — list all users (admin only)
     - `PATCH /user/:id/admin` — toggle `is_admin` flag (admin only)
   - **How:** Protected with `protect + adminOnly`.
 
-- [ ] **Timetable template endpoints**
+- [DONE] **Timetable template endpoints**
   - **Why:** The frontend has full UI for recurring timetable templates (`room_timetable_templates`). Currently these are handled by Supabase Edge Functions. They need to be ported to this backend.
   - **What:**
     - `GET /room/:id/timetable` — get timetable templates for a room
@@ -198,6 +198,7 @@
   - **What:** Send email on: booking created (to teacher + any invitees), booking cancelled, booking approved/denied.
   - **How:** Create `services/emailService.js`. Configure nodemailer with SMTP (MIT WPU SMTP or a transactional provider). Call from booking creation/cancellation handlers.
 
+- [DONE] **Email Queue**
 ---
 
 ## PHASE 4 — Security Hardening

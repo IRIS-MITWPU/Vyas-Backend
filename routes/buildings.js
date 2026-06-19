@@ -1,13 +1,96 @@
-// routes/buildings.js
 import express from "express";
 import pool from "../database/db.js";
-import redis from "../database/redis.js";
 import { adminOnly, protect } from "../middlewares/authMiddleware.js";
-import { success } from "zod";
 
 const router = express.Router();
 
-const ROOM_LOCK_KEY = (roomId) => `room:${roomId}:lock`;
+// ==============================
+// GET /buildings → list all active buildings
+// ==============================
+router.get("/", async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM buildings WHERE is_active = true ORDER BY name"
+    );
+    res.json({ success: true, buildings: result.rows });
+  } catch (error) {
+    console.error("Error listing buildings:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// ==============================
+// GET /buildings/all-floors → all floors (admin)
+// ==============================
+router.get("/all-floors", protect, adminOnly, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT f.*, f.floor_number AS number, b.name AS building_name, b.id AS building_id_ref
+       FROM floors f
+       JOIN buildings b ON f.building_id = b.id
+       ORDER BY b.name, f.floor_number`
+    );
+    res.json({ success: true, floors: result.rows });
+  } catch (error) {
+    console.error("Error listing floors:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// ==============================
+// GET /buildings/all-rooms → all rooms (admin)
+// ==============================
+router.get("/all-rooms", protect, adminOnly, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT r.*, f.floor_number, f.floor_number AS number, f.name AS floor_name, b.name AS building_name
+       FROM rooms r
+       JOIN floors f ON r.floor_id = f.id
+       JOIN buildings b ON f.building_id = b.id
+       ORDER BY b.name, f.floor_number, r.name`
+    );
+    res.json({ success: true, rooms: result.rows });
+  } catch (error) {
+    console.error("Error listing rooms:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
+
+// ==============================
+// GET /buildings/:id/floors → floors with nested rooms for a building (by ID)
+// ==============================
+router.get("/:id/floors", async (req, res) => {
+  try {
+    const buildingRes = await pool.query(
+      "SELECT * FROM buildings WHERE id = $1",
+      [req.params.id]
+    );
+    if (buildingRes.rows.length === 0) {
+      return res.status(404).json({ success: false, error: "Building not found" });
+    }
+    const building = buildingRes.rows[0];
+
+    const floorsRes = await pool.query(
+      "SELECT *, floor_number AS number FROM floors WHERE building_id = $1 ORDER BY floor_number",
+      [req.params.id]
+    );
+
+    const floors = await Promise.all(
+      floorsRes.rows.map(async (floor) => {
+        const roomsRes = await pool.query(
+          "SELECT * FROM rooms WHERE floor_id = $1 ORDER BY name",
+          [floor.id]
+        );
+        return { ...floor, rooms: roomsRes.rows, building };
+      })
+    );
+
+    res.json({ success: true, floors });
+  } catch (error) {
+    console.error("Error fetching building floors:", error);
+    res.status(500).json({ success: false, error: "Internal server error" });
+  }
+});
 
 // GET /buildings/:name/rooms → get all room in a specified building
 router.get("/:name/rooms", async (req, res) => {
@@ -33,28 +116,7 @@ router.get("/:name/rooms", async (req, res) => {
       [buildingId],
     );
 
-    // add lock info for each room
-    const rooms = [];
-    for (const row of roomsRes.rows) {
-      const lockRaw = await redis.get(ROOM_LOCK_KEY(row.id));
-      let lock = null;
-      if (lockRaw) {
-        try {
-          const p = JSON.parse(lockRaw);
-          lock = {
-            byUserId: p.ownerId,
-            createdAt: p.createdAt,
-            ttl: p.ttl,
-            expiresAt: p.createdAt + p.ttl,
-          };
-        } catch (e) {
-          lock = null;
-        }
-      }
-      rooms.push({ ...row, lock });
-    }
-
-    res.json({ success: true, rooms });
+    res.json({ success: true, rooms: roomsRes.rows });
   } catch (err) {
     console.error("GET /building/:name/rooms error", err);
     res.status(500).json({ success: false, message: "Server error" });
@@ -728,9 +790,6 @@ router.delete("/room/:id", protect, adminOnly, async (req, res) => {
       });
     }
 
-    // Optional: remove Redis lock if exists
-    await redis.del(ROOM_LOCK_KEY(id));
-
     // Delete room
     await client.query(
       "DELETE FROM rooms WHERE id = $1",
@@ -786,11 +845,6 @@ router.get("/rooms/free", protect, async (req, res) => {
   }
 
   try {
-    // Step 1:
-    // Get rooms that are:
-    // - active
-    // - not booked in requested time range
-
     const roomsRes = await pool.query(
       `
       SELECT
@@ -824,26 +878,10 @@ router.get("/rooms/free", protect, async (req, res) => {
       [start.toISOString(), end.toISOString()],
     );
 
-    // Step 2:
-    // Remove Redis locked rooms
-
-    const freeRooms = [];
-
-    for (const room of roomsRes.rows) {
-      const lockRaw = await redis.get(ROOM_LOCK_KEY(room.id));
-
-      // Skip locked rooms
-      if (lockRaw) {
-        continue;
-      }
-
-      freeRooms.push(room);
-    }
-
     return res.json({
       success: true,
-      count: freeRooms.length,
-      rooms: freeRooms,
+      count: roomsRes.rows.length,
+      rooms: roomsRes.rows,
     });
   } catch (error) {
     console.error("GET /rooms/free error", error);

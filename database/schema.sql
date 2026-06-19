@@ -6,6 +6,13 @@
 -- (auth.users FK, RLS, auth.uid()) replaced by backend-native equivalents.
 
 -- ============================================================
+-- EXTENSIONS
+-- ============================================================
+
+-- Required for EXCLUDE USING gist (room_id WITH =, ...) on a non-range column
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
+-- ============================================================
 -- ENUMS
 -- ============================================================
 
@@ -119,6 +126,26 @@ CREATE TABLE IF NOT EXISTS bookings (
   updated_at            TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
   CONSTRAINT bookings_end_after_start CHECK (end_time > start_time)
 );
+
+-- Exclusion constraint: atomically prevents overlapping active bookings for the same room.
+-- '[)' = [start, end): back-to-back bookings (9:00-10:00, 10:00-11:00) do NOT conflict.
+-- Applied only to non-cancelled, non-denied bookings so cancelled slots can be rebooked.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'no_overlapping_bookings'
+      AND conrelid = 'bookings'::regclass
+  ) THEN
+    ALTER TABLE bookings
+    ADD CONSTRAINT no_overlapping_bookings
+    EXCLUDE USING gist (
+      room_id WITH =,
+      tstzrange(start_time, end_time, '[)') WITH &&
+    )
+    WHERE (status NOT IN ('cancelled', 'denied'));
+  END IF;
+END $$;
 
 -- ============================================================
 -- BOOKING INVITEES
