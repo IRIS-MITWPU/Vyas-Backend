@@ -3,7 +3,6 @@ import { Server } from "socket.io";
 // import { createAdapter } from "@socket.io/redis-adapter"; // TODO: Uncomment when Redis is needed
 import { v4 as uuidv4 } from "uuid";
 import jwt from "jsonwebtoken";
-// import redis from "../database/redis.js"; // TODO: Uncomment when Redis is needed
 
 // // Redis key helpers (commented out - see Phase 4)
 // const ROOM_LOCK_KEY = (roomId) => `room:${roomId}:lock`;

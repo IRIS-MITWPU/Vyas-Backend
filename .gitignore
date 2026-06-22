@@ -3,4 +3,6 @@ node_modules
 
 # Claude Code context — local only, do not commit
 CLAUDE.md
-CLAUDE_CODE_INSTRUCTIONS_BACKEND.md
+CLAUDE_CODE_INSTRUCTIONS_BACKEND.md 
+
+BEFORE_DEP.md

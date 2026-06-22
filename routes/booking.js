@@ -1,10 +1,56 @@
 // Vyas-Backend\routes\booking.js
 import express from "express";
+import { z } from "zod";
 import pool from "../database/db.js";
 import { protect, adminOnly } from "../middlewares/authMiddleware.js";
 import { enqueueEmail } from "../services/emailQueue.js";
 
 const router = express.Router();
+
+const VALID_STATUSES = ["pending", "confirmed", "denied", "cancelled"];
+
+// cancelled is fully terminal (matches DELETE /booking/:id's one-way cancel).
+// denied can still be cancelled for record-keeping, but never un-denied back
+// to pending/confirmed — reopening a decision goes through a new booking.
+const ALLOWED_STATUS_TRANSITIONS = {
+  pending: ["pending", "confirmed", "denied", "cancelled"],
+  confirmed: ["confirmed", "denied", "cancelled"],
+  denied: ["denied", "cancelled"],
+  cancelled: ["cancelled"],
+};
+
+const createBookingSchema = z
+  .object({
+    roomId: z.string().uuid("roomId must be a valid UUID"),
+    title: z.string().trim().min(1, "title is required").max(255),
+    description: z.string().trim().max(2000).optional().nullable(),
+    startTime: z.string().datetime({ message: "startTime must be a valid ISO datetime" }),
+    endTime: z.string().datetime({ message: "endTime must be a valid ISO datetime" }),
+    classDivision: z.string().trim().max(255).optional().nullable(),
+    panel: z.string().trim().max(255).optional().nullable(),
+    yearCourse: z.string().trim().max(255).optional().nullable(),
+    isRecurring: z.boolean().optional(),
+  })
+  .refine((d) => new Date(d.endTime) > new Date(d.startTime), {
+    message: "endTime must be after startTime",
+    path: ["endTime"],
+  });
+
+const updateBookingSchema = z
+  .object({
+    title: z.string().trim().min(1).max(255).optional(),
+    description: z.string().trim().max(2000).optional().nullable(),
+    start_time: z.string().datetime().optional(),
+    end_time: z.string().datetime().optional(),
+    class_division: z.string().trim().max(255).optional().nullable(),
+    panel: z.string().trim().max(255).optional().nullable(),
+    year_course: z.string().trim().max(255).optional().nullable(),
+    status: z.enum(VALID_STATUSES).optional(),
+  })
+  .refine((d) => !(d.start_time && d.end_time) || new Date(d.end_time) > new Date(d.start_time), {
+    message: "end_time must be after start_time",
+    path: ["end_time"],
+  });
 
 const conflictMetrics = {
   totalAttempts: 0,
@@ -12,7 +58,7 @@ const conflictMetrics = {
   lastConflict: null,
 };
 
-function recordConflict(roomId, teacherId) {
+function recordConflict(roomId, teacherId, code) {
   conflictMetrics.conflictCount++;
   conflictMetrics.lastConflict = {
     roomId,
@@ -20,14 +66,30 @@ function recordConflict(roomId, teacherId) {
     timestamp: new Date().toISOString(),
   };
   console.log(
-    `⚠️  [CONTENTION] Room booking conflict (error 23P01) - Room: ${roomId}, Attempts: ${conflictMetrics.totalAttempts}, Total conflicts: ${conflictMetrics.conflictCount}, Last: ${conflictMetrics.lastConflict.timestamp}`
+    `⚠️  [CONTENTION] Room booking conflict (error ${code}) - Room: ${roomId}, Attempts: ${conflictMetrics.totalAttempts}, Total conflicts: ${conflictMetrics.conflictCount}, Last: ${conflictMetrics.lastConflict.timestamp}`
   );
 }
+
+// The check_booking_overlap/check_user_booking_conflict triggers fire BEFORE
+// the no_overlapping_bookings exclusion constraint and raise their own
+// P0001 with this wording — in practice this is the common conflict path,
+// while 23P01 (the exclusion constraint itself) only surfaces in the narrow
+// window where two requests race past both triggers concurrently. Both
+// represent the same condition, so both map to a clean 409 below.
+const CONFLICT_TRIGGER_MESSAGE = /^(Booking conflict:|User booking conflict:)/;
 
 // ==============================
 // CREATE BOOKING
 // ==============================
 router.post("/", protect, async (req, res) => {
+  const parsed = createBookingSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: "Invalid booking data",
+      details: parsed.error.flatten().fieldErrors,
+    });
+  }
+
   const {
     roomId,
     title,
@@ -38,29 +100,12 @@ router.post("/", protect, async (req, res) => {
     panel,
     yearCourse,
     isRecurring = false,
-  } = req.body;
+  } = parsed.data;
 
   const teacherId = req.user.id;
 
   //Track booking attempts
   conflictMetrics.totalAttempts++;
-
-  if (!roomId || !title || !startTime || !endTime) {
-    return res.status(400).json({
-      error: "Missing required booking fields",
-    });
-  }
-
-  const start = new Date(startTime);
-  const end = new Date(endTime);
-
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    return res.status(400).json({ error: "Invalid startTime or endTime" });
-  }
-
-  if (end <= start) {
-    return res.status(400).json({ error: "End time must be after start time" });
-  }
 
   const client = await pool.connect();
 
@@ -154,11 +199,22 @@ router.post("/", protect, async (req, res) => {
     await client.query("ROLLBACK");
     console.error("Booking error:", err);
 
-    // Monitor PostgreSQL concurrency conflicts (error 23P01)
-    if (err.code === "23P01") {
-      recordConflict(roomId, teacherId);
+    // Monitor PostgreSQL concurrency conflicts — both the exclusion
+    // constraint (23P01) and the BEFORE trigger's own overlap checks
+    // (P0001, see CONFLICT_TRIGGER_MESSAGE above) are the same condition.
+    const isConflict =
+      err.code === "23P01" ||
+      (err.code === "P0001" && CONFLICT_TRIGGER_MESSAGE.test(err.message));
+
+    if (isConflict) {
+      recordConflict(roomId, teacherId, err.code);
+      // `details` keeps the trigger's exact wording ("Booking conflict: ..."
+      // vs "User booking conflict: ...") so the frontend's existing
+      // substring-matching in bookingErrors.ts still tells the two cases
+      // apart — only the HTTP status changes here, not the message text.
       return res.status(409).json({
         error: "Room already booked for this time slot",
+        details: err.message,
       });
     }
     res.status(500).json({
@@ -219,7 +275,13 @@ router.get("/my", protect, async (req, res) => {
 // ==============================
 router.get("/admin/all", protect, adminOnly, async (req, res) => {
   try {
-    const { date, room, status, page = 1, limit = 20 } = req.query;
+    const { date, room, status } = req.query;
+    // Frontend's ReportGenerator.tsx/AdminDashboard.tsx intentionally call
+    // this with `?limit=10000` as a "give me everything" workaround (see
+    // REMAINING.md) — clamp against garbage/abusive values without breaking
+    // that existing usage, rather than capping at a low value like 100.
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 10000);
     const offset = (page - 1) * limit;
     
     let query = `
@@ -462,6 +524,14 @@ router.patch("/:id", protect, async (req, res) => {
   const userId = req.user.id;
   const isAdmin = req.user.is_admin;
 
+  const parsed = updateBookingSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: "Invalid booking data",
+      details: parsed.error.flatten().fieldErrors,
+    });
+  }
+
   const {
     title,
     description,
@@ -471,11 +541,24 @@ router.patch("/:id", protect, async (req, res) => {
     panel,
     year_course,
     status,
-  } = req.body;
+  } = parsed.data;
 
   // Only admins can change status
   if (status !== undefined && !isAdmin) {
     return res.status(403).json({ error: "Only admins can change booking status" });
+  }
+
+  if (status !== undefined) {
+    const currentRes = await pool.query("SELECT status FROM bookings WHERE id = $1", [bookingId]);
+    if (currentRes.rows.length === 0) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+    const currentStatus = currentRes.rows[0].status;
+    if (!ALLOWED_STATUS_TRANSITIONS[currentStatus]?.includes(status)) {
+      return res.status(409).json({
+        error: `Cannot change booking status from "${currentStatus}" to "${status}"`,
+      });
+    }
   }
 
   const fields = [];
@@ -491,7 +574,8 @@ router.patch("/:id", protect, async (req, res) => {
   if (year_course !== undefined) { fields.push(`year_course = $${i++}`); values.push(year_course || null); }
   if (status !== undefined) {
     fields.push(`status = $${i++}`); values.push(status);
-    if (status === "confirmed" && isAdmin) {
+    // Records who actioned the approve/deny decision, not just approvals.
+    if ((status === "confirmed" || status === "denied") && isAdmin) {
       fields.push(`approved_by = $${i++}`); values.push(userId);
       fields.push(`approved_at = $${i++}`); values.push(new Date().toISOString());
     }

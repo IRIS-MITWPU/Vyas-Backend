@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import morgan from "morgan";
+import helmet from "helmet";
 import http from "http";
 
 dotenv.config();
@@ -50,9 +51,20 @@ const { protect, adminOnly } = await import("./middlewares/authMiddleware.js");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Trust the hosting platform's reverse proxy (Render/Railway/etc.) for one
+// hop, so express-rate-limit and req.ip see the real client IP instead of
+// the proxy's.
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
+
 // ============================================================
 // Core middleware
 // ============================================================
+// crossOriginResourcePolicy defaults to "same-origin", which fights the
+// CORS setup below — this API is meant to be consumed from FRONTEND_ORIGIN
+// (a different origin/port), so it needs "cross-origin" instead.
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(morgan("combined"));
 app.use(express.json());
 app.use(cookieParser());
@@ -131,7 +143,54 @@ const httpServer = http.createServer(app);
 const { io } = await initSockets(httpServer);
 app.set("io", io);
 
+let emailWorker;
+
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  startEmailWorker();
+  emailWorker = startEmailWorker();
+});
+
+// ============================================================
+// Graceful shutdown — let in-flight requests/jobs finish instead of
+// being hard-killed. Hosting platforms (Render/Railway/Fly) send SIGTERM
+// on every redeploy, so this runs on every normal deploy, not just incidents.
+// ============================================================
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n${signal} received — shutting down gracefully...`);
+
+  const forceExit = setTimeout(() => {
+    console.error("⚠️ Graceful shutdown timed out — forcing exit");
+    process.exit(1);
+  }, 10000);
+  forceExit.unref();
+
+  // io.close() disconnects all sockets and closes the underlying HTTP
+  // server once existing requests/connections finish.
+  io.close(async () => {
+    console.log("✅ HTTP + Socket.IO server closed");
+    try {
+      if (emailWorker) await emailWorker.close();
+      await pool.end();
+      console.log("✅ Shutdown complete");
+      process.exit(0);
+    } catch (err) {
+      console.error("❌ Error during shutdown:", err);
+      process.exit(1);
+    }
+  });
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ Unhandled promise rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("❌ Uncaught exception:", err);
+  process.exit(1);
 });

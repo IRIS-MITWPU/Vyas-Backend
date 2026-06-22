@@ -11,6 +11,16 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   password: process.env.DB_PASSWORD,
   port: process.env.DB_PORT,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+// Without this, an idle client emitting a backend error (DB restart, network
+// blip, managed-Postgres failover) is an uncaught exception that kills the
+// whole process instead of just that one connection.
+pool.on('error', (err) => {
+  console.error('❌ Unexpected PG pool error:', err);
 });
 
 // Test connection on startup

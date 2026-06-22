@@ -2,14 +2,15 @@
 import express from "express";
 import { register, login, forgotPassword, resetPassword } from "../controllers/userController.js";
 import { protect, adminOnly } from "../middlewares/authMiddleware.js";
+import { loginLimiter, authLimiter } from "../middlewares/rateLimiter.js";
 import pool from "../database/db.js";
 
 const router = express.Router();
 
-router.post("/register", register);
-router.post("/login", login);
-router.post("/forgot-password", forgotPassword);
-router.post("/reset-password", resetPassword);
+router.post("/register", authLimiter, register);
+router.post("/login", loginLimiter, login);
+router.post("/forgot-password", authLimiter, forgotPassword);
+router.post("/reset-password", authLimiter, resetPassword);
 
 // ==============================
 // GET /user/me — current user's profile

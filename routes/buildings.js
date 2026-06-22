@@ -70,22 +70,53 @@ router.get("/:id/floors", async (req, res) => {
     }
     const building = buildingRes.rows[0];
 
-    const floorsRes = await pool.query(
-      "SELECT *, floor_number AS number FROM floors WHERE building_id = $1 ORDER BY floor_number",
+    // Single LEFT JOIN instead of one rooms query per floor (was N+1).
+    const rowsRes = await pool.query(
+      `SELECT
+         f.id AS floor_id, f.building_id, f.floor_number, f.name AS floor_name,
+         f.created_at AS floor_created_at, f.updated_at AS floor_updated_at,
+         r.id AS room_id, r.name AS room_name, r.floor_id AS room_floor_id,
+         r.room_type, r.capacity, r.equipment, r.is_active, r.requires_approval,
+         r.created_at AS room_created_at, r.updated_at AS room_updated_at
+       FROM floors f
+       LEFT JOIN rooms r ON r.floor_id = f.id
+       WHERE f.building_id = $1
+       ORDER BY f.floor_number, r.name`,
       [req.params.id]
     );
 
-    const floors = await Promise.all(
-      floorsRes.rows.map(async (floor) => {
-        const roomsRes = await pool.query(
-          "SELECT * FROM rooms WHERE floor_id = $1 ORDER BY name",
-          [floor.id]
-        );
-        return { ...floor, rooms: roomsRes.rows, building };
-      })
-    );
+    const floorsById = new Map();
+    for (const row of rowsRes.rows) {
+      if (!floorsById.has(row.floor_id)) {
+        floorsById.set(row.floor_id, {
+          id: row.floor_id,
+          building_id: row.building_id,
+          floor_number: row.floor_number,
+          number: row.floor_number,
+          name: row.floor_name,
+          created_at: row.floor_created_at,
+          updated_at: row.floor_updated_at,
+          rooms: [],
+          building,
+        });
+      }
+      if (row.room_id) {
+        floorsById.get(row.floor_id).rooms.push({
+          id: row.room_id,
+          name: row.room_name,
+          floor_id: row.room_floor_id,
+          room_type: row.room_type,
+          capacity: row.capacity,
+          equipment: row.equipment,
+          is_active: row.is_active,
+          requires_approval: row.requires_approval,
+          created_at: row.room_created_at,
+          updated_at: row.room_updated_at,
+        });
+      }
+    }
 
-    res.json({ success: true, floors });
+    res.json({ success: true, floors: [...floorsById.values()] });
   } catch (error) {
     console.error("Error fetching building floors:", error);
     res.status(500).json({ success: false, error: "Internal server error" });
@@ -478,6 +509,7 @@ router.put("/floor/:id", protect, adminOnly, async (req, res) => {
 
   const floor_number = req.body?.floor_number;
   const name = req.body?.name;
+  const building_id = req.body?.building_id;
 
   const client = await pool.connect();
 
@@ -497,6 +529,19 @@ router.put("/floor/:id", protect, adminOnly, async (req, res) => {
 
     const existingFloor = floorRes.rows[0];
 
+    if (building_id !== undefined && building_id !== existingFloor.building_id) {
+      const targetBuildingRes = await client.query(
+        "SELECT id FROM buildings WHERE id = $1",
+        [building_id],
+      );
+      if (targetBuildingRes.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Target building not found",
+        });
+      }
+    }
+
     // Keep old values if not provided
     const updatedFloorNumber =
       floor_number !== undefined
@@ -508,6 +553,9 @@ router.put("/floor/:id", protect, adminOnly, async (req, res) => {
         ? name?.trim() || null
         : existingFloor.name;
 
+    const updatedBuildingId =
+      building_id !== undefined ? building_id : existingFloor.building_id;
+
     const updatedAt = new Date().toISOString();
 
     // Update floor
@@ -517,13 +565,15 @@ router.put("/floor/:id", protect, adminOnly, async (req, res) => {
       SET
         floor_number = $1,
         name = $2,
-        updated_at = $3
-      WHERE id = $4
+        building_id = $3,
+        updated_at = $4
+      WHERE id = $5
       RETURNING *
       `,
       [
         updatedFloorNumber,
         updatedName,
+        updatedBuildingId,
         updatedAt,
         id,
       ],
@@ -666,6 +716,7 @@ router.put("/room/:id", protect, adminOnly, async (req, res) => {
     equipment,
     is_active,
     requires_approval,
+    floor_id,
   } = req.body || {};
 
   const client = await pool.connect();
@@ -685,6 +736,19 @@ router.put("/room/:id", protect, adminOnly, async (req, res) => {
     }
 
     const existingRoom = roomRes.rows[0];
+
+    if (floor_id !== undefined && floor_id !== existingRoom.floor_id) {
+      const targetFloorRes = await client.query(
+        "SELECT id FROM floors WHERE id = $1",
+        [floor_id],
+      );
+      if (targetFloorRes.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Target floor not found",
+        });
+      }
+    }
 
     // Keep old values if fields are not provided
     const updatedName =
@@ -717,6 +781,9 @@ router.put("/room/:id", protect, adminOnly, async (req, res) => {
         ? requires_approval
         : existingRoom.requires_approval;
 
+    const updatedFloorId =
+      floor_id !== undefined ? floor_id : existingRoom.floor_id;
+
     const updatedAt = new Date().toISOString();
 
     // Update room
@@ -730,8 +797,9 @@ router.put("/room/:id", protect, adminOnly, async (req, res) => {
         equipment = $4,
         is_active = $5,
         requires_approval = $6,
-        updated_at = $7
-      WHERE id = $8
+        floor_id = $7,
+        updated_at = $8
+      WHERE id = $9
       RETURNING *
       `,
       [
@@ -741,6 +809,7 @@ router.put("/room/:id", protect, adminOnly, async (req, res) => {
         updatedEquipment,
         updatedIsActive,
         updatedRequiresApproval,
+        updatedFloorId,
         updatedAt,
         id,
       ],
@@ -787,6 +856,22 @@ router.delete("/room/:id", protect, adminOnly, async (req, res) => {
       return res.status(404).json({
         success: false,
         error: "Room not found",
+      });
+    }
+
+    // Prevent deleting a room with active bookings — rooms.id cascades to
+    // bookings, so without this check the DELETE below would silently wipe
+    // booking history. Cancelled/denied bookings don't block deletion,
+    // matching the exclusion constraint's own definition of "active".
+    const bookingsRes = await client.query(
+      "SELECT id FROM bookings WHERE room_id = $1 AND status NOT IN ('cancelled', 'denied') LIMIT 1",
+      [id],
+    );
+
+    if (bookingsRes.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Cannot delete room because it has active bookings",
       });
     }
 

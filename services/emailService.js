@@ -1,6 +1,19 @@
 // services/emailService.js
 import nodemailer from "nodemailer";
 
+// HTML-escapes a value before it's interpolated into an email template —
+// booking title/description/etc. are user-supplied and would otherwise let
+// HTML/script content land verbatim in a recipient's inbox.
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[c]));
+}
+
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
@@ -83,7 +96,7 @@ export async function sendWelcomeEmail(to, fullName) {
                   <td style="padding:40px 35px;">
 
                     <h2 style="margin:0 0 18px;color:#111827;font-size:24px;">
-                      Hi ${fullName},
+                      Hi ${escapeHtml(fullName)},
                     </h2>
 
                     <p style="margin:0 0 18px;color:#4b5563;font-size:16px;line-height:1.7;">
@@ -149,7 +162,7 @@ export async function sendWelcomeEmail(to, fullName) {
                     style="padding:24px;background:#f9fafb;border-top:1px solid #e5e7eb;">
 
                     <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
-                      This email was sent to ${to}
+                      This email was sent to ${escapeHtml(to)}
                     </p>
 
                     <p style="margin:8px 0 0;color:#9ca3af;font-size:12px;">
@@ -246,7 +259,7 @@ export async function sendBookingConfirmationEmail({
                   <td style="padding:40px 35px;">
 
                     <h2 style="margin:0 0 18px;color:#111827;font-size:24px;">
-                      Hi ${fullName},
+                      Hi ${escapeHtml(fullName)},
                     </h2>
 
                     <p style="margin:0 0 25px;color:#4b5563;
@@ -264,13 +277,13 @@ export async function sendBookingConfirmationEmail({
 
                       <tr>
                         <td style="padding:10px 0;color:#111827;">
-                          <strong>Room:</strong> ${roomName}
+                          <strong>Room:</strong> ${escapeHtml(roomName)}
                         </td>
                       </tr>
 
                       <tr>
                         <td style="padding:10px 0;color:#111827;">
-                          <strong>Title:</strong> ${title}
+                          <strong>Title:</strong> ${escapeHtml(title)}
                         </td>
                       </tr>
 
@@ -279,7 +292,7 @@ export async function sendBookingConfirmationEmail({
                           ? `
                         <tr>
                           <td style="padding:10px 0;color:#111827;">
-                            <strong>Description:</strong> ${description}
+                            <strong>Description:</strong> ${escapeHtml(description)}
                           </td>
                         </tr>
                       `
@@ -303,7 +316,7 @@ export async function sendBookingConfirmationEmail({
                           ? `
                         <tr>
                           <td style="padding:10px 0;color:#111827;">
-                            <strong>Class Division:</strong> ${classDivision}
+                            <strong>Class Division:</strong> ${escapeHtml(classDivision)}
                           </td>
                         </tr>
                       `
@@ -315,7 +328,7 @@ export async function sendBookingConfirmationEmail({
                           ? `
                         <tr>
                           <td style="padding:10px 0;color:#111827;">
-                            <strong>Panel:</strong> ${panel}
+                            <strong>Panel:</strong> ${escapeHtml(panel)}
                           </td>
                         </tr>
                       `
@@ -327,7 +340,7 @@ export async function sendBookingConfirmationEmail({
                           ? `
                         <tr>
                           <td style="padding:10px 0;color:#111827;">
-                            <strong>Year/Course:</strong> ${yearCourse}
+                            <strong>Year/Course:</strong> ${escapeHtml(yearCourse)}
                           </td>
                         </tr>
                       `
@@ -372,7 +385,7 @@ export async function sendBookingConfirmationEmail({
                     <p style="margin:0;color:#6b7280;
                       font-size:13px;line-height:1.6;">
 
-                      This booking confirmation was sent to ${to}
+                      This booking confirmation was sent to ${escapeHtml(to)}
                     </p>
 
                     <p style="margin:8px 0 0;color:#9ca3af;font-size:12px;">
