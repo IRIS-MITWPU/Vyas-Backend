@@ -6,6 +6,7 @@ import cors from "cors";
 import morgan from "morgan";
 import helmet from "helmet";
 import http from "http";
+import { generalLimiter } from "./middlewares/rateLimiter.js";
 
 dotenv.config();
 
@@ -33,16 +34,18 @@ if (process.env.JWT_SECRET.length < 32) {
 }
 
 // Dynamic imports run after dotenv + validation, so env vars are guaranteed present.
-const { default: buildingRoutes }  = await import("./routes/buildings.js");
-const { default: userRoutes }      = await import("./routes/users.js");
-const { default: bookingRoutes }   = await import("./routes/booking.js");
-const { default: timetableRoutes } = await import("./routes/timetable.js");
-const { default: initSockets }     = await import("./sockets/index.js");
-const { default: pool }            = await import("./database/db.js");
+const { default: buildingRoutes }        = await import("./routes/buildings.js");
+const { default: userRoutes }            = await import("./routes/users.js");
+const { default: bookingRoutes }         = await import("./routes/booking.js");
+const { default: timetableRoutes }       = await import("./routes/timetable.js");
+const { default: timetableImportRoutes } = await import("./routes/timetable-import.js");
+const { default: initSockets }           = await import("./sockets/index.js");
+const { default: pool }                  = await import("./database/db.js");
 
 // Email queue + Bull Board dashboard
-const { emailQueue }         = await import("./services/emailQueue.js");
-const { startEmailWorker }   = await import("./workers/emailWorker.js");
+const { emailQueue }              = await import("./services/emailQueue.js");
+const { startEmailWorker }        = await import("./workers/emailWorker.js");
+const { startImportPipelineWorker } = await import("./workers/importPipelineWorker.js");
 const { createBullBoard }    = await import("@bull-board/api");
 const { BullMQAdapter }      = await import("@bull-board/api/bullMQAdapter");
 const { ExpressAdapter }     = await import("@bull-board/express");
@@ -85,6 +88,10 @@ app.use(
   })
 );
 
+// Baseline rate limit for all routes — loginLimiter/authLimiter (routes/users.js)
+// apply tighter limits on top of this for the auth endpoints specifically.
+app.use(generalLimiter);
+
 // ============================================================
 // Bull Board — email queue dashboard (admin only)
 // ============================================================
@@ -116,6 +123,7 @@ app.use("/buildings", buildingRoutes);
 app.use("/user", userRoutes);
 app.use("/booking", bookingRoutes);
 app.use("/", timetableRoutes);        // /room/:id/timetable + /timetable/:id
+app.use("/timetable-import", timetableImportRoutes);
 
 // ============================================================
 // 404 handler
@@ -144,10 +152,12 @@ const { io } = await initSockets(httpServer);
 app.set("io", io);
 
 let emailWorker;
+let importWorker;
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   emailWorker = startEmailWorker();
+  importWorker = startImportPipelineWorker();
 });
 
 // ============================================================
@@ -173,6 +183,7 @@ function shutdown(signal) {
     console.log("✅ HTTP + Socket.IO server closed");
     try {
       if (emailWorker) await emailWorker.close();
+      if (importWorker) await importWorker.close();
       await pool.end();
       console.log("✅ Shutdown complete");
       process.exit(0);

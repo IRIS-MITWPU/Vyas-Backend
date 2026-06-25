@@ -19,3 +19,13 @@ export const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again in an hour." },
 });
+
+// Baseline limit applied to every request — an additional layer on top of
+// loginLimiter/authLimiter, which stay in place for their tighter limits.
+export const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many requests, please try again later." },
+});

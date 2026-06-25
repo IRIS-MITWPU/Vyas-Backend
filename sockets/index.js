@@ -3,6 +3,7 @@ import { Server } from "socket.io";
 // import { createAdapter } from "@socket.io/redis-adapter"; // TODO: Uncomment when Redis is needed
 import { v4 as uuidv4 } from "uuid";
 import jwt from "jsonwebtoken";
+import cookie from "cookie";
 
 // // Redis key helpers (commented out - see Phase 4)
 // const ROOM_LOCK_KEY = (roomId) => `room:${roomId}:lock`;
@@ -98,12 +99,12 @@ export default async function initSockets(httpServer) {
 
   // io.adapter(createAdapter(pubClient, subClient));
 
-  // Socket auth middleware
+  // Socket auth middleware — reads the httpOnly "token" cookie set by
+  // userController.js, the same way `protect` does for REST requests.
   io.use((socket, next) => {
     try {
-      const token =
-        socket.handshake.auth?.token ||
-        socket.handshake.headers?.authorization?.split(" ")[1];
+      const cookies = cookie.parse(socket.handshake.headers?.cookie || "");
+      const token = cookies.token;
 
       if (!token) return next(new Error("Auth token missing"));
 

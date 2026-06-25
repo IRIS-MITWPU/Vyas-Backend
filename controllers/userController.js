@@ -10,21 +10,14 @@ import { enqueueEmail } from "../services/emailQueue.js";
 // ============================================================
 // Validation schemas
 // ============================================================
-const mitwpuEmail = z
-  .string()
-  .email("Invalid email format");
-  
-  // For testing purpose, this restriction is removed
-  // .refine((e) => e.endsWith("@mitwpu.edu.in"), "Use your @mitwpu.edu.in email");
-
 const registerSchema = z.object({
   full_name: z.string().min(1, "Full name is required"),
-  email: mitwpuEmail,
+  email: z.string().email("Invalid email format"),
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 const loginSchema = z.object({
-  email: mitwpuEmail,
+  email: z.string().email("Invalid email format"),
   password: z.string().min(1, "Password is required"),
 });
   
@@ -47,8 +40,8 @@ const cookieOptions = {
   maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
 };
 
-const generateToken = (id) =>
-  jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
+const generateToken = (id, tokenVersion) =>
+  jwt.sign({ id, token_version: tokenVersion }, process.env.JWT_SECRET, { expiresIn: "30d" });
 
 // ============================================================
 // REGISTER
@@ -64,16 +57,30 @@ export async function register(req, res) {
 
   const { full_name, email, password } = parsed.data;
 
+  if (!email.endsWith("@mitwpu.edu.in")) {
+    return res.status(403).json({
+      success: false,
+      message: "Registration is restricted to @mitwpu.edu.in email addresses.",
+    });
+  }
+
   try {
     const user = await registerUser(full_name, email, password);
     await enqueueEmail("welcome", { to: email, fullName: full_name });
-    const token = generateToken(user.id);
+    const token = generateToken(user.id, user.token_version);
     res.cookie("token", token, cookieOptions);
     res
       .status(201)
       .json({ message: "User registered successfully", user, token });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    if (err.message === "User already exists") {
+      // Generic message — doesn't confirm whether the email is already registered.
+      return res.status(400).json({
+        success: false,
+        message: "Registration failed. Please check your details and try again.",
+      });
+    }
+    res.status(500).json({ error: err.message });
   }
 }
 
@@ -98,7 +105,7 @@ export async function login(req, res) {
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
-    const token = generateToken(user.user_id);
+    const token = generateToken(user.user_id, user.token_version);
     res.cookie("token", token, cookieOptions);
     res.json({
       message: "Login successful",
@@ -192,6 +199,12 @@ export async function resetPassword(req, res) {
     await pool.query(
       "UPDATE user_auth SET password_hash = $1 WHERE user_id = $2",
       [passwordHash, row.user_id],
+    );
+
+    // Bumping token_version invalidates every JWT issued before this reset.
+    await pool.query(
+      "UPDATE profiles SET token_version = token_version + 1 WHERE id = $1",
+      [row.user_id],
     );
 
     await pool.query("DELETE FROM password_reset_tokens WHERE id = $1", [

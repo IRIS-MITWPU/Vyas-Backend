@@ -33,13 +33,14 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS profiles (
-  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  full_name   TEXT        NOT NULL,
-  email       TEXT        UNIQUE NOT NULL,
-  department  TEXT,
-  is_admin    BOOLEAN     NOT NULL DEFAULT FALSE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  full_name     TEXT        NOT NULL,
+  email         TEXT        UNIQUE NOT NULL,
+  department    TEXT,
+  is_admin      BOOLEAN     NOT NULL DEFAULT FALSE,
+  token_version INTEGER     NOT NULL DEFAULT 0,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ============================================================
@@ -664,3 +665,131 @@ CREATE INDEX IF NOT EXISTS idx_room_timetable_template_exceptions_template_week
 INSERT INTO buildings (name, description, is_active)
 VALUES ('Vyas', 'Default building', true)
 ON CONFLICT (name) DO NOTHING;
+
+-- ============================================================
+-- TIMETABLE IMPORT SYSTEM — added 2026-06-23
+-- LLM-assisted extraction of recurring lectures from uploaded
+-- timetable documents, with a human-review gate before any
+-- room_timetable_templates rows are created.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS timetable_import_jobs (
+  id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  name           VARCHAR(255) NOT NULL,
+  status         VARCHAR(50) NOT NULL DEFAULT 'CREATED',
+    -- CREATED | PROCESSING | REVIEW_REQUIRED | APPROVED | COMPLETED | FAILED
+  semester       VARCHAR(100),
+  effective_from DATE,
+  created_by     UUID        NOT NULL REFERENCES profiles(id),
+  created_at     TIMESTAMPTZ DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ DEFAULT NOW(),
+  error_message  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS timetable_import_files (
+  id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id             UUID        NOT NULL REFERENCES timetable_import_jobs(id) ON DELETE CASCADE,
+  original_filename  VARCHAR(500) NOT NULL,
+  storage_path       VARCHAR(1000) NOT NULL,
+  mime_type          VARCHAR(100) NOT NULL,
+  file_size_bytes    BIGINT,
+  extraction_status  VARCHAR(50) DEFAULT 'PENDING',
+    -- PENDING | PROCESSING | COMPLETED | FAILED | NEEDS_OCR
+  raw_text           TEXT,
+  ocr_used           BOOLEAN     DEFAULT FALSE,
+  created_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS timetable_extracted_lectures (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id          UUID        NOT NULL REFERENCES timetable_import_jobs(id) ON DELETE CASCADE,
+  source_file_id  UUID        REFERENCES timetable_import_files(id),
+
+  -- Raw LLM output — NEVER update these after insert
+  raw_teacher_name      VARCHAR(500),
+  raw_subject           VARCHAR(500),
+  raw_room_number       VARCHAR(100),
+  raw_weekday           VARCHAR(50),
+  raw_start_time        VARCHAR(50),
+  raw_duration_minutes  VARCHAR(50),
+  raw_batch             VARCHAR(100),
+  raw_lecture_type      VARCHAR(100),
+
+  -- Normalized values (deterministic code sets these, not the LLM)
+  teacher_name      VARCHAR(500),
+  subject           VARCHAR(500),
+  room_number       VARCHAR(100),
+  weekday_number    SMALLINT,        -- 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
+  start_time        TIME,
+  duration_minutes  INTEGER,
+  batch             VARCHAR(100),
+  lecture_type      VARCHAR(50),     -- CLASSROOM | LAB
+
+  -- Quality
+  confidence        VARCHAR(20) DEFAULT 'LOW',   -- HIGH | MEDIUM | LOW
+  confidence_score  NUMERIC(5,2),
+  missing_fields    TEXT[],
+
+  -- Admin review
+  status        VARCHAR(50) DEFAULT 'PENDING',
+    -- PENDING | APPROVED | REJECTED | BOOKING_CREATED | BOOKING_FAILED
+  reviewed_by   UUID REFERENCES profiles(id),
+  reviewed_at   TIMESTAMPTZ,
+
+  -- LLM metadata
+  llm_model_used     VARCHAR(200),
+  llm_raw_response   JSONB,
+
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS timetable_import_conflicts (
+  id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id        UUID        NOT NULL REFERENCES timetable_import_jobs(id) ON DELETE CASCADE,
+  conflict_type VARCHAR(100) NOT NULL,
+    -- ROOM_CLASH | FACULTY_CLASH | DUPLICATE | MISSING_FIELD
+  severity      VARCHAR(50) NOT NULL,    -- ERROR | WARNING
+  lecture_ids   UUID[],
+  description   TEXT NOT NULL,
+  resolved      BOOLEAN DEFAULT FALSE,
+  resolved_by   UUID REFERENCES profiles(id),
+  resolved_at   TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS timetable_admin_corrections (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  lecture_id  UUID        NOT NULL REFERENCES timetable_extracted_lectures(id) ON DELETE CASCADE,
+  field_name  VARCHAR(100) NOT NULL,
+  old_value   TEXT,
+  new_value   TEXT,
+  edited_by   UUID        NOT NULL REFERENCES profiles(id),
+  edited_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS timetable_booking_logs (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  lecture_id        UUID        NOT NULL REFERENCES timetable_extracted_lectures(id) ON DELETE CASCADE,
+  request_payload   JSONB       NOT NULL,
+  response_payload  JSONB,
+  http_status       INTEGER,
+  status            VARCHAR(50) NOT NULL,      -- SUCCESS | FAILED | RETRYING
+  attempt_count     INTEGER DEFAULT 1,
+  error_message     TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_timetable_import_files_job_id
+    ON timetable_import_files (job_id);
+CREATE INDEX IF NOT EXISTS idx_timetable_extracted_lectures_job_id
+    ON timetable_extracted_lectures (job_id);
+CREATE INDEX IF NOT EXISTS idx_timetable_extracted_lectures_status
+    ON timetable_extracted_lectures (status);
+CREATE INDEX IF NOT EXISTS idx_timetable_import_conflicts_job_id
+    ON timetable_import_conflicts (job_id);
+CREATE INDEX IF NOT EXISTS idx_timetable_admin_corrections_lecture_id
+    ON timetable_admin_corrections (lecture_id);
+CREATE INDEX IF NOT EXISTS idx_timetable_booking_logs_lecture_id
+    ON timetable_booking_logs (lecture_id);

@@ -18,7 +18,7 @@ export async function registerUser(full_name, email, password) {
     const profileResult = await client.query(
       `INSERT INTO profiles (full_name, email)
        VALUES ($1, $2)
-       RETURNING id, full_name, email, is_admin`,
+       RETURNING id, full_name, email, is_admin, token_version`,
       [full_name, email]
     );
 
@@ -43,11 +43,12 @@ export async function registerUser(full_name, email, password) {
 
 export async function findUserByEmail(email) {
   const query = `
-    SELECT 
+    SELECT
       p.id AS user_id,
       p.full_name,
       p.email,
       p.is_admin,
+      p.token_version,
       a.password_hash
     FROM profiles p
     JOIN user_auth a ON p.id = a.user_id

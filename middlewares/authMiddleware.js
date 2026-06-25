@@ -18,7 +18,7 @@ export const protect = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const userResult = await pool.query(
-      "SELECT id, full_name, email, is_admin FROM profiles WHERE id = $1",
+      "SELECT id, full_name, email, is_admin, token_version FROM profiles WHERE id = $1",
       [decoded.id]
     );
 
@@ -26,7 +26,12 @@ export const protect = async (req, res, next) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    req.user = userResult.rows[0];
+    const dbUser = userResult.rows[0];
+    if (dbUser.token_version !== decoded.token_version) {
+      return res.status(401).json({ error: "Session expired. Please log in again." });
+    }
+
+    req.user = dbUser;
     next();
   } catch (err) {
     console.error("Auth Error:", err);
