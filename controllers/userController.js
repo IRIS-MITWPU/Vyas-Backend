@@ -35,7 +35,7 @@ const resetPasswordSchema = z.object({
 // ============================================================
 const cookieOptions = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
+  secure: true, // SameSite=None requires Secure; this API is always served over HTTPS
   sameSite: "None",
   maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
 };

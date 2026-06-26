@@ -72,7 +72,7 @@ app.use(morgan("combined"));
 app.use(express.json());
 app.use(cookieParser());
 const allowedOrigins = [
-  process.env.FRONTEND_ORIGIN,
+  process.env.FRONTEND_ORIGIN || "https://vyas-web-app.vercel.app",
   "http://localhost:5173",
   "http://localhost:8080",
 ].filter(Boolean);
