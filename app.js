@@ -116,6 +116,7 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Vyas Backend is running" });
 });
 
+app.set('trust proxy', 1); // Trust first proxy (Railway's load balancer)
 // ============================================================
 // Routes
 // ============================================================
