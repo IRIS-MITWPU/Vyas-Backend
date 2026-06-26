@@ -33,10 +33,9 @@ async function processEmail(job) {
 }
 
 export function startEmailWorker() {
-  const connection = new IORedis(
-    process.env.REDIS_URL || "redis://localhost:6379",
-    { maxRetriesPerRequest: null }
-  );
+  const connection = new IORedis(process.env.REDIS_URL, {
+    maxRetriesPerRequest: null,
+  });
 
   const worker = new Worker("emails", processEmail, {
     connection,

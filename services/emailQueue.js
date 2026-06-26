@@ -3,10 +3,9 @@ import { Queue } from "bullmq";
 import IORedis from "ioredis";
 
 // BullMQ requires ioredis with maxRetriesPerRequest: null
-const connection = new IORedis(
-  process.env.REDIS_URL || "redis://localhost:6379",
-  { maxRetriesPerRequest: null }
-);
+const connection = new IORedis(process.env.REDIS_URL, {
+  maxRetriesPerRequest: null,
+});
 
 connection.on("error", (err) => console.error("❌ BullMQ Redis error:", err));
 
