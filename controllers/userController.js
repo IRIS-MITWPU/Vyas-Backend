@@ -36,8 +36,8 @@ const resetPasswordSchema = z.object({
 const isProduction = process.env.NODE_ENV === "production";
 const cookieOptions = {
   httpOnly: true,
-  secure: isProduction, // SameSite=None requires Secure; only true in production (HTTPS)
-  sameSite: isProduction ? "None" : "Lax",
+  secure: isProduction, // requires HTTPS; only true in production
+  sameSite: "Lax", // API is now served same-origin via the Vercel /api rewrite in production
   maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
 };
 
