@@ -49,6 +49,7 @@ export async function findUserByEmail(email) {
       p.email,
       p.is_admin,
       p.token_version,
+      p.email_verified,
       a.password_hash
     FROM profiles p
     JOIN user_auth a ON p.id = a.user_id

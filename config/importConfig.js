@@ -3,7 +3,7 @@
 // needs this config, and app.js imports that router.
 
 export const IMPORT_CONFIG = {
-  uploadDir: process.env.IMPORT_UPLOAD_DIR || './uploads/timetable-imports',
+  s3Bucket: process.env.S3_BUCKET,
   ocrTextThreshold: parseInt(process.env.OCR_TEXT_THRESHOLD || '100'),
   llmRetryCount: parseInt(process.env.LLM_RETRY_COUNT || '3'),
   llmProvider: process.env.LLM_PROVIDER || 'gemini',
@@ -15,6 +15,13 @@ export const IMPORT_CONFIG = {
     'text/csv',
     'application/vnd.ms-excel',
   ],
+  // Off by default — the single-letter codes (R/C/E/S) found at short
+  // break-time-column positions in real sample files have no discoverable
+  // legend defining their meaning, only a consistent position. Enable only
+  // once that's been confirmed against more real files.
+  stripBreakColumns: process.env.STRIP_BREAK_COLUMNS === 'true',
+  breakColumnMaxDurationMinutes: parseInt(process.env.BREAK_COLUMN_MAX_DURATION_MINUTES || '20'),
+  legendFuzzyMatchThreshold: parseFloat(process.env.LEGEND_FUZZY_MATCH_THRESHOLD || '0.8'),
 };
 
 if (!IMPORT_CONFIG.geminiApiKey) {

@@ -1,16 +1,25 @@
 // routes/users.js
 import express from "express";
-import { register, login, forgotPassword, resetPassword } from "../controllers/userController.js";
+import {
+  register,
+  login,
+  forgotPassword,
+  resetPassword,
+  verifyEmail,
+  resendVerification,
+} from "../controllers/userController.js";
 import { protect, adminOnly } from "../middlewares/authMiddleware.js";
-import { loginLimiter, authLimiter } from "../middlewares/rateLimiter.js";
+import { loginLimiter, authLimiter, otpVerifyLimiter, otpEmailLimiter } from "../middlewares/rateLimiter.js";
 import pool from "../database/db.js";
 
 const router = express.Router();
 
-router.post("/register", authLimiter, register);
+router.post("/register", authLimiter, otpEmailLimiter, register);
 router.post("/login", loginLimiter, login);
 router.post("/forgot-password", authLimiter, forgotPassword);
 router.post("/reset-password", authLimiter, resetPassword);
+router.post("/verify-email", otpVerifyLimiter, otpEmailLimiter, verifyEmail);
+router.post("/resend-verification", otpVerifyLimiter, otpEmailLimiter, resendVerification);
 
 // ==============================
 // GET /user/me — current user's profile

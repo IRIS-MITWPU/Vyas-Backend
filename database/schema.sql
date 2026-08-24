@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   department    TEXT,
   is_admin      BOOLEAN     NOT NULL DEFAULT FALSE,
   token_version INTEGER     NOT NULL DEFAULT 0,
+  email_verified BOOLEAN    NOT NULL DEFAULT FALSE,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -52,6 +53,37 @@ CREATE TABLE IF NOT EXISTS user_auth (
   password_hash TEXT        NOT NULL,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ============================================================
+-- EMAIL VERIFICATION  (OTP codes for register-time email verification)
+-- folded in from migrations/005_otp_email_verification.sql, which is
+-- already applied to the live DB but was never reflected here
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS email_verification_codes (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id      UUID        NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  code_hash    TEXT        NOT NULL,
+  expires_at   TIMESTAMPTZ NOT NULL,
+  attempts     INT         NOT NULL DEFAULT 0,
+  consumed_at  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_email_verification_codes_user_id ON email_verification_codes(user_id);
+
+-- ============================================================
+-- OAUTH IDENTITIES  (Google Sign-In and future providers)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS oauth_identities (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id           UUID        NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  provider          TEXT        NOT NULL,
+  provider_user_id  TEXT        NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (provider, provider_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_identities_user_id ON oauth_identities(user_id);
 
 -- ============================================================
 -- BUILDINGS
@@ -677,7 +709,7 @@ CREATE TABLE IF NOT EXISTS timetable_import_jobs (
   id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   name           VARCHAR(255) NOT NULL,
   status         VARCHAR(50) NOT NULL DEFAULT 'CREATED',
-    -- CREATED | PROCESSING | REVIEW_REQUIRED | APPROVED | COMPLETED | FAILED
+    -- CREATED | PROCESSING | REVIEW_REQUIRED | APPROVED | COMPLETED | FAILED | CANCELLED
   semester       VARCHAR(100),
   effective_from DATE,
   created_by     UUID        NOT NULL REFERENCES profiles(id),
@@ -697,6 +729,10 @@ CREATE TABLE IF NOT EXISTS timetable_import_files (
     -- PENDING | PROCESSING | COMPLETED | FAILED | NEEDS_OCR
   raw_text           TEXT,
   ocr_used           BOOLEAN     DEFAULT FALSE,
+  failed_chunks      JSONB       DEFAULT '[]'::jsonb,
+    -- LLM chunks that exhausted retries during extraction — see migration 006
+  panel_legend       JSONB       DEFAULT '[]'::jsonb,
+    -- Durable per-panel Theory/Lab legend lookups (serialized), see migration 007
   created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -729,6 +765,11 @@ CREATE TABLE IF NOT EXISTS timetable_extracted_lectures (
   confidence        VARCHAR(20) DEFAULT 'LOW',   -- HIGH | MEDIUM | LOW
   confidence_score  NUMERIC(5,2),
   missing_fields    TEXT[],
+
+  -- Panel-scoped legend backfill — see migration 007
+  panel_label         VARCHAR(200),
+  sheet_name          VARCHAR(200),
+  legend_backfilled   BOOLEAN NOT NULL DEFAULT FALSE,
 
   -- Admin review
   status        VARCHAR(50) DEFAULT 'PENDING',
@@ -793,3 +834,32 @@ CREATE INDEX IF NOT EXISTS idx_timetable_admin_corrections_lecture_id
     ON timetable_admin_corrections (lecture_id);
 CREATE INDEX IF NOT EXISTS idx_timetable_booking_logs_lecture_id
     ON timetable_booking_logs (lecture_id);
+
+-- ============================================================
+-- TIMETABLE IMPORT — PROGRESS & CANCELLATION — added 2026-07-15
+-- ============================================================
+
+ALTER TABLE timetable_import_jobs
+  ADD COLUMN IF NOT EXISTS current_stage VARCHAR(50),
+    -- QUEUED | READING_FILE | OCR | CALLING_LLM | CORRELATING
+    -- | DETECTING_CONFLICTS | GENERATING_BOOKINGS | DONE
+  ADD COLUMN IF NOT EXISTS current_file_id UUID REFERENCES timetable_import_files(id),
+  ADD COLUMN IF NOT EXISTS files_total INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS files_completed INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS progress_percent SMALLINT DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS cancel_requested_by UUID REFERENCES profiles(id),
+  ADD COLUMN IF NOT EXISTS cancel_requested_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS stopped_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS timetable_import_job_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id UUID NOT NULL REFERENCES timetable_import_jobs(id) ON DELETE CASCADE,
+  event_type VARCHAR(50) NOT NULL,
+    -- STAGE_CHANGE | FILE_COMPLETED | ERROR | STOP_REQUESTED | STOPPED
+  file_id UUID REFERENCES timetable_import_files(id),
+  message TEXT NOT NULL,
+  detail JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_import_job_events_job ON timetable_import_job_events(job_id, created_at);

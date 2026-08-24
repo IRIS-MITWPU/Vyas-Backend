@@ -10,6 +10,7 @@
 // normalizationService.js) — every write here converts with `- 1`.
 
 import pool from '../database/db.js';
+import { setStage, isCancelled, handleCancellation } from './importProgress.js';
 
 export async function generateBookingsForJob(jobId) {
   const lecturesRes = await pool.query(
@@ -25,6 +26,15 @@ export async function generateBookingsForJob(jobId) {
   let failCount = 0;
 
   for (const lecture of lectures) {
+    if (await isCancelled(jobId)) {
+      await handleCancellation(jobId);
+      return { successCount, failCount };
+    }
+    await setStage(jobId, 'GENERATING_BOOKINGS', {
+      filesTotal: lectures.length,
+      filesCompleted: successCount + failCount,
+    });
+
     const roomRes = await pool.query(
       `SELECT id FROM rooms WHERE LOWER(name) = LOWER($1) AND is_active = TRUE LIMIT 1`,
       [lecture.room_number]
@@ -98,6 +108,7 @@ export async function generateBookingsForJob(jobId) {
     }
   }
 
+  await setStage(jobId, 'DONE', {});
   await pool.query(
     `UPDATE timetable_import_jobs
      SET status = 'COMPLETED', updated_at = NOW(), error_message = $1

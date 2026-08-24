@@ -20,7 +20,7 @@ const JOB_OPTIONS = {
 
 /**
  * Enqueue an outgoing email.
- * @param {"welcome"|"password-reset"|"booking-confirmation"} type
+ * @param {"welcome"|"password-reset"|"booking-confirmation"|"verification-code"} type
  * @param {object} payload  Data forwarded to the matching emailService function
  */
 export async function enqueueEmail(type, payload) {

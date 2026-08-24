@@ -11,7 +11,9 @@ import {
   sendWelcomeEmail,
   sendPasswordResetEmail,
   sendBookingConfirmationEmail,
+  sendVerificationEmail,
 } from "../services/emailService.js";
+import { decryptOtp } from "../utils/otpCrypto.js";
 
 async function processEmail(job) {
   switch (job.name) {
@@ -25,6 +27,15 @@ async function processEmail(job) {
 
     case "booking-confirmation":
       await sendBookingConfirmationEmail(job.data);
+      break;
+
+    case "verification-code":
+      await sendVerificationEmail(
+        job.data.to,
+        job.data.fullName,
+        decryptOtp(job.data.encryptedCode),
+        job.data.expiresInMinutes
+      );
       break;
 
     default:

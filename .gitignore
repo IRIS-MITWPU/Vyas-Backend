@@ -1,6 +1,7 @@
 node_modules
 .env
 uploads/
+TimeTable/
 
 # Claude Code context — local only, do not commit
 CLAUDE.md

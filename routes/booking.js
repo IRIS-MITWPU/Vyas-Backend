@@ -4,6 +4,7 @@ import { z } from "zod";
 import pool from "../database/db.js";
 import { protect, adminOnly } from "../middlewares/authMiddleware.js";
 import { enqueueEmail } from "../services/emailQueue.js";
+import { sendError } from "../utils/errorResponse.js";
 
 const router = express.Router();
 
@@ -197,7 +198,6 @@ router.post("/", protect, async (req, res) => {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("Booking error:", err);
 
     // Monitor PostgreSQL concurrency conflicts — both the exclusion
     // constraint (23P01) and the BEFORE trigger's own overlap checks
@@ -211,16 +211,13 @@ router.post("/", protect, async (req, res) => {
       // `details` keeps the trigger's exact wording ("Booking conflict: ..."
       // vs "User booking conflict: ...") so the frontend's existing
       // substring-matching in bookingErrors.ts still tells the two cases
-      // apart — only the HTTP status changes here, not the message text.
-      return res.status(409).json({
-        error: "Room already booked for this time slot",
-        details: err.message,
-      });
+      // apart in non-production — only the HTTP status changes here, not
+      // the message text. In production `details` is omitted (sec-2), so
+      // this specific sub-classification is lost there until feat-8 adds
+      // structured error codes (see FINDINGS.md).
+      return sendError(res, 409, "Room already booked for this time slot", err);
     }
-    res.status(500).json({
-      error: "Booking failed",
-      details: err.message,
-    });
+    sendError(res, 500, "Booking failed", err);
   } finally {
     client.release();
   }
@@ -262,11 +259,7 @@ router.get("/my", protect, async (req, res) => {
       total: result.rows.length
     });
   } catch (err) {
-    console.error("Error fetching user bookings:", err);
-    res.status(500).json({ 
-      error: "Failed to fetch bookings",
-      details: err.message 
-    });
+    sendError(res, 500, "Failed to fetch bookings", err);
   }
 });
 
@@ -346,11 +339,7 @@ router.get("/admin/all", protect, adminOnly, async (req, res) => {
     });
     
   } catch (err) {
-    console.error("Error fetching admin bookings:", err);
-    res.status(500).json({ 
-      error: "Failed to fetch bookings",
-      details: err.message 
-    });
+    sendError(res, 500, "Failed to fetch bookings", err);
   }
 });
 
@@ -390,11 +379,7 @@ router.get("/:id", protect, async (req, res) => {
       booking
     });
   } catch (err) {
-    console.error("Error fetching booking details:", err);
-    res.status(500).json({ 
-      error: "Failed to fetch booking details",
-      details: err.message 
-    });
+    sendError(res, 500, "Failed to fetch booking details", err);
   }
 });
 
@@ -466,11 +451,7 @@ router.delete("/:id", protect, async (req, res) => {
     
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("Error cancelling booking:", err);
-    res.status(500).json({ 
-      error: "Failed to cancel booking",
-      details: err.message 
-    });
+    sendError(res, 500, "Failed to cancel booking", err);
   } finally {
     client.release();
   }
@@ -491,7 +472,7 @@ router.get("/room/:roomId", protect, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT b.*, r.name AS room_name, p.full_name AS teacher_full_name, p.email AS teacher_email
+      `SELECT b.*, r.name AS room_name, p.full_name AS teacher_full_name
        FROM bookings b
        JOIN rooms r ON b.room_id = r.id
        LEFT JOIN profiles p ON b.teacher_id = p.id
@@ -505,7 +486,7 @@ router.get("/room/:roomId", protect, async (req, res) => {
 
     const bookings = result.rows.map((b) => ({
       ...b,
-      profiles: { full_name: b.teacher_full_name, email: b.teacher_email },
+      profiles: { full_name: b.teacher_full_name },
     }));
 
     res.json({ success: true, bookings });
@@ -602,8 +583,7 @@ router.patch("/:id", protect, async (req, res) => {
     }
     res.json({ success: true, booking: result.rows[0] });
   } catch (err) {
-    console.error("Error updating booking:", err);
-    res.status(500).json({ error: "Failed to update booking", details: err.message });
+    sendError(res, 500, "Failed to update booking", err);
   }
 });
 

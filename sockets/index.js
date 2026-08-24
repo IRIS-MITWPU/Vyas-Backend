@@ -1,9 +1,20 @@
 // sockets/index.js
 import { Server } from "socket.io";
-// import { createAdapter } from "@socket.io/redis-adapter"; // TODO: Uncomment when Redis is needed
+import { createAdapter } from "@socket.io/redis-adapter";
+import IORedis from "ioredis";
 import { v4 as uuidv4 } from "uuid";
 import jwt from "jsonwebtoken";
 import cookie from "cookie";
+import pool from "../database/db.js";
+
+// Non-breaking minimum pending an owner decision on whether room calendars
+// are intentionally institution-wide visible (see FINDINGS.md, sec-3):
+// validate the id is well-formed and exists before joining, and cap distinct
+// joins per socket to blunt a "join every room id in sequence" harvesting
+// pattern. Not a department-scoped restriction — `rooms`/`buildings` have no
+// department relation (only a free-text `profiles.department` column).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_JOINS_PER_SOCKET = 20;
 
 // // Redis key helpers (commented out - see Phase 4)
 // const ROOM_LOCK_KEY = (roomId) => `room:${roomId}:lock`;
@@ -90,14 +101,20 @@ export default async function initSockets(httpServer) {
     },
   });
 
-  // // Dedicated pub/sub clients for the Socket.IO Redis adapter
-  // // NOTE: Disabled - using in-memory adapter only. Uncomment when Redis is needed for horizontal scaling
-  // const pubClient = redis.duplicate();
-  // const subClient = redis.duplicate();
-  // await pubClient.connect();
-  // await subClient.connect();
-
-  // io.adapter(createAdapter(pubClient, subClient));
+  // Redis adapter so booking broadcasts reach sockets connected to any
+  // instance, not just the one that handled the write. Falls back to
+  // Socket.IO's default in-memory adapter (single-instance only) if
+  // REDIS_URL isn't set, rather than crashing local dev.
+  if (process.env.REDIS_URL) {
+    const pubClient = new IORedis(process.env.REDIS_URL);
+    const subClient = pubClient.duplicate();
+    pubClient.on("error", (err) => console.error("Socket.IO Redis pub client error:", err));
+    subClient.on("error", (err) => console.error("Socket.IO Redis sub client error:", err));
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log("✅ Socket.IO using Redis adapter (horizontal scaling enabled)");
+  } else {
+    console.warn("⚠️  REDIS_URL not set — Socket.IO using in-memory adapter (single-instance only)");
+  }
 
   // Socket auth middleware — reads the httpOnly "token" cookie set by
   // userController.js, the same way `protect` does for REST requests.
@@ -120,12 +137,59 @@ export default async function initSockets(httpServer) {
     const userId = socket.user.id;
     console.log(`🔌 Socket connected: ${socket.id} user=${userId}`);
 
-    socket.on("join:building", (name) => {
-      if (name) socket.join(`building:${name}`);
+    // Reserved synchronously (before the DB await) so concurrent join
+    // events — e.g. a burst of join:room calls fired in the same tick —
+    // can't all race past the cap check before any socket.join() resolves.
+    const reservedChannels = new Set();
+
+    socket.on("join:building", async (name) => {
+      if (typeof name !== "string" || !name.trim()) {
+        console.warn(`[socket] join:building rejected (malformed payload) user=${userId} socket=${socket.id}`);
+        return;
+      }
+      const channel = `building:${name}`;
+      if (!reservedChannels.has(channel) && reservedChannels.size >= MAX_JOINS_PER_SOCKET) {
+        console.warn(`[socket] join:building rejected (join cap reached) user=${userId} socket=${socket.id}`);
+        return;
+      }
+      reservedChannels.add(channel);
+      try {
+        const result = await pool.query("SELECT 1 FROM buildings WHERE name = $1", [name]);
+        if (!result.rows.length) {
+          reservedChannels.delete(channel);
+          console.warn(`[socket] join:building rejected (unknown building "${name}") user=${userId} socket=${socket.id}`);
+          return;
+        }
+        socket.join(channel);
+      } catch (err) {
+        reservedChannels.delete(channel);
+        console.error("join:building error", err);
+      }
     });
 
-    socket.on("join:room", (roomId) => {
-      if (roomId) socket.join(`room:${roomId}`);
+    socket.on("join:room", async (roomId) => {
+      if (typeof roomId !== "string" || !UUID_RE.test(roomId)) {
+        console.warn(`[socket] join:room rejected (malformed payload) user=${userId} socket=${socket.id}`);
+        return;
+      }
+      const channel = `room:${roomId}`;
+      if (!reservedChannels.has(channel) && reservedChannels.size >= MAX_JOINS_PER_SOCKET) {
+        console.warn(`[socket] join:room rejected (join cap reached) user=${userId} socket=${socket.id}`);
+        return;
+      }
+      reservedChannels.add(channel);
+      try {
+        const result = await pool.query("SELECT 1 FROM rooms WHERE id = $1", [roomId]);
+        if (!result.rows.length) {
+          reservedChannels.delete(channel);
+          console.warn(`[socket] join:room rejected (unknown room ${roomId}) user=${userId} socket=${socket.id}`);
+          return;
+        }
+        socket.join(channel);
+      } catch (err) {
+        reservedChannels.delete(channel);
+        console.error("join:room error", err);
+      }
     });
 
     // // ==========================

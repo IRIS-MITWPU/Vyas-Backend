@@ -6,7 +6,8 @@ import cors from "cors";
 import morgan from "morgan";
 import helmet from "helmet";
 import http from "http";
-import { generalLimiter } from "./middlewares/rateLimiter.js";
+import passport from "passport";
+import { sendError } from "./utils/errorResponse.js";
 
 dotenv.config();
 
@@ -22,6 +23,9 @@ const REQUIRED_ENV = [
   "DB_HOST",
   "DB_NAME",
   "REDIS_URL",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "GOOGLE_CALLBACK_URL",
 ];
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length) {
@@ -36,6 +40,7 @@ if (process.env.JWT_SECRET.length < 32) {
 // Dynamic imports run after dotenv + validation, so env vars are guaranteed present.
 const { default: buildingRoutes }        = await import("./routes/buildings.js");
 const { default: userRoutes }            = await import("./routes/users.js");
+const { default: oauthRoutes }           = await import("./routes/oauth.js");
 const { default: bookingRoutes }         = await import("./routes/booking.js");
 const { default: timetableRoutes }       = await import("./routes/timetable.js");
 const { default: timetableImportRoutes } = await import("./routes/timetable-import.js");
@@ -46,10 +51,12 @@ const { default: pool }                  = await import("./database/db.js");
 const { emailQueue }              = await import("./services/emailQueue.js");
 const { startEmailWorker }        = await import("./workers/emailWorker.js");
 const { startImportPipelineWorker } = await import("./workers/importPipelineWorker.js");
+const { startOtpCleanupSweep }    = await import("./services/otpCleanup.js");
 const { createBullBoard }    = await import("@bull-board/api");
 const { BullMQAdapter }      = await import("@bull-board/api/bullMQAdapter");
 const { ExpressAdapter }     = await import("@bull-board/express");
 const { protect, adminOnly } = await import("./middlewares/authMiddleware.js");
+const { generalLimiter } = await import("./middlewares/rateLimiter.js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -71,6 +78,7 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(morgan("combined"));
 app.use(express.json());
 app.use(cookieParser());
+app.use(passport.initialize()); // no passport.session() — JWT-cookie sessions only, session:false everywhere
 const allowedOrigins = [
   process.env.FRONTEND_ORIGIN || "https://vyas-web-app.vercel.app",
   "http://localhost:5173",
@@ -122,6 +130,7 @@ app.set('trust proxy', 1); // Trust first proxy (Railway's load balancer)
 // ============================================================
 app.use("/buildings", buildingRoutes);
 app.use("/user", userRoutes);
+app.use("/auth", oauthRoutes);
 app.use("/booking", bookingRoutes);
 app.use("/", timetableRoutes);        // /room/:id/timetable + /timetable/:id
 app.use("/timetable-import", timetableImportRoutes);
@@ -141,8 +150,7 @@ app.use((req, res) => {
 // ============================================================
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(err.status || 500).json({ error: err.message || "Internal server error" });
+  sendError(res, err.status || 500, "Internal server error", err);
 });
 
 // ============================================================
@@ -159,6 +167,7 @@ httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   emailWorker = startEmailWorker();
   importWorker = startImportPipelineWorker();
+  startOtpCleanupSweep();
 });
 
 // ============================================================

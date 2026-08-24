@@ -45,6 +45,34 @@ export async function sendPasswordResetEmail(to, resetUrl) {
   });
 }
 
+export async function sendVerificationEmail(to, fullName, code, expiresInMinutes) {
+  const info = await transporter.sendMail({
+    from: process.env.SMTP_FROM || '"Vyas Room Booking" <nir.test09@gmail.com>',
+    to,
+    subject: "Vyas — Verify your email",
+    text: [
+      `Hi ${fullName},`,
+      "",
+      "Use the code below to verify your email address and finish creating your Vyas Room Booking account.",
+      "",
+      `Verification code: ${code}`,
+      `This code expires in ${expiresInMinutes} minutes.`,
+      "",
+      "If you did not request this, you can safely ignore this email.",
+    ].join("\n"),
+    html: `
+      <p>Hi ${escapeHtml(fullName)},</p>
+      <p>Use the code below to verify your email address and finish creating your <strong>Vyas Room Booking</strong> account.</p>
+      <p style="font-size:28px;font-weight:bold;letter-spacing:6px;">${escapeHtml(code)}</p>
+      <p>This code expires in ${expiresInMinutes} minutes.</p>
+      <p style="color:#888;font-size:12px;">If you did not request this, you can safely ignore this email.</p>
+    `,
+  });
+
+  console.log(`✅ Verification email sent to ${to}`);
+  console.log("📨 Message ID:", info.messageId);
+}
+
 export async function sendWelcomeEmail(to, fullName) {
   const dashboardUrl = process.env.FRONTEND_ORIGIN;
 
