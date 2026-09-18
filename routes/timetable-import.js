@@ -335,14 +335,17 @@ router.patch('/jobs/:jobId/lectures/:lectureId', protect, adminOnly, async (req,
 // DELETE /timetable-import/jobs/:jobId/lectures/:lectureId — reject a lecture
 // ==============================
 router.delete('/jobs/:jobId/lectures/:lectureId', protect, adminOnly, async (req, res) => {
-  const { lectureId } = req.params;
+  const { jobId, lectureId } = req.params;
   try {
-    await pool.query(
+    const result = await pool.query(
       `UPDATE timetable_extracted_lectures
        SET status = 'REJECTED', reviewed_by = $1, reviewed_at = NOW(), updated_at = NOW()
-       WHERE id = $2`,
-      [req.user.id, lectureId]
+       WHERE id = $2 AND job_id = $3`,
+      [req.user.id, lectureId, jobId]
     );
+    if (!result.rowCount) {
+      return res.status(404).json({ success: false, error: 'Lecture not found' });
+    }
     res.status(204).send();
   } catch (err) {
     console.error('Error rejecting extracted lecture:', err);
@@ -354,13 +357,13 @@ router.delete('/jobs/:jobId/lectures/:lectureId', protect, adminOnly, async (req
 // PATCH /timetable-import/jobs/:jobId/conflicts/:conflictId/resolve
 // ==============================
 router.patch('/jobs/:jobId/conflicts/:conflictId/resolve', protect, adminOnly, async (req, res) => {
-  const { conflictId } = req.params;
+  const { jobId, conflictId } = req.params;
   try {
     const result = await pool.query(
       `UPDATE timetable_import_conflicts
        SET resolved = TRUE, resolved_by = $1, resolved_at = NOW()
-       WHERE id = $2 RETURNING *`,
-      [req.user.id, conflictId]
+       WHERE id = $2 AND job_id = $3 RETURNING *`,
+      [req.user.id, conflictId, jobId]
     );
     if (!result.rows.length) {
       return res.status(404).json({ success: false, error: 'Conflict not found' });

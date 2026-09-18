@@ -3,7 +3,7 @@ import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
 import IORedis from "ioredis";
 import { v4 as uuidv4 } from "uuid";
-import jwt from "jsonwebtoken";
+import { verifySessionToken } from "../middlewares/authMiddleware.js";
 import cookie from "cookie";
 import pool from "../database/db.js";
 
@@ -117,16 +117,20 @@ export default async function initSockets(httpServer) {
   }
 
   // Socket auth middleware — reads the httpOnly "token" cookie set by
-  // userController.js, the same way `protect` does for REST requests.
-  io.use((socket, next) => {
+  // userController.js and applies the exact same session rule `protect` does
+  // for REST, including the token_version check. Without that check a session
+  // revoked by a password reset or "log out everywhere" kept its socket alive
+  // until the JWT's natural expiry, even though REST already rejected it.
+  io.use(async (socket, next) => {
     try {
       const cookies = cookie.parse(socket.handshake.headers?.cookie || "");
       const token = cookies.token;
 
       if (!token) return next(new Error("Auth token missing"));
 
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      socket.user = { id: decoded.id };
+      const { user, decoded } = await verifySessionToken(token);
+      socket.user = { id: user.id, is_admin: user.is_admin };
+      socket.tokenExpiresAt = decoded.exp * 1000;
       next();
     } catch {
       next(new Error("Authentication failed"));
@@ -261,7 +265,17 @@ export default async function initSockets(httpServer) {
     //   }
     // });
 
+    // A long-lived socket is authorized once, at connect. Drop it when its
+    // token expires so the client reconnects and gets re-validated against
+    // token_version — that reconnect is how a revoked session actually loses
+    // its socket. Bounds staleness by the token lifetime, with no polling.
+    const expiryTimer = setTimeout(
+      () => socket.disconnect(true),
+      Math.max(socket.tokenExpiresAt - Date.now(), 0)
+    );
+
     socket.on("disconnect", () => {
+      clearTimeout(expiryTimer);
       console.log(`❌ Socket disconnected: ${socket.id}`);
     });
   });

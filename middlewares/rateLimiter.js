@@ -5,11 +5,36 @@ import IORedis from "ioredis";
 // Dedicated Redis connection for rate limiting — same ioredis/REDIS_URL
 // pattern already used by services/emailQueue.js, services/importQueue.js,
 // and sockets/index.js (each owns its own connection rather than sharing one).
+// Unlike the BullMQ connections (which require maxRetriesPerRequest: null so
+// jobs survive a blip), a rate-limit lookup must fail fast. With retries
+// unbounded and the offline queue on, a Redis outage made every rate-limited
+// request — i.e. every request, via generalLimiter — hang forever instead of
+// erroring, so `passOnStoreError` below never fired and the whole API wedged.
+// These three settings are what turn that hang into a prompt error that
+// passOnStoreError can then let through.
 const redisClient = new IORedis(process.env.REDIS_URL, {
-  maxRetriesPerRequest: null,
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
+  commandTimeout: 500,
 });
 redisClient.on("error", (err) => console.error("❌ Rate-limiter Redis error:", err));
 
+// rate-limit-redis's RedisStore.init() runs synchronously at rateLimit()
+// construction time (right below) and caches whatever loadIncrementScript()
+// returns — including a rejection — as this.incrementScriptSha forever; it
+// only retries on a Redis-level NOSCRIPT error, never on a connection error.
+// So if init() fires before this client finishes connecting, every limiter
+// is permanently broken for the process's lifetime, even after Redis is up.
+// Waiting here for "ready" (or a bounded timeout, so a real outage still
+// fails open at boot instead of hanging) avoids that race.
+await Promise.race([
+  new Promise((resolve) => redisClient.once("ready", resolve)),
+  new Promise((resolve) => setTimeout(resolve, 2000)),
+]);
+
+// Every limiter below pairs this store with `passOnStoreError: true` — a Redis
+// outage degrades brute-force protection temporarily rather than taking down
+// login/register entirely. Matches perEmailLimiter, which already fails open.
 function redisStore(prefix) {
   return new RedisStore({
     sendCommand: (...args) => redisClient.call(...args),
@@ -24,6 +49,7 @@ export const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many login attempts. Please try again in 15 minutes." },
+  passOnStoreError: true,
   store: redisStore("rl:login:"),
 });
 
@@ -36,6 +62,7 @@ export const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again in an hour." },
+  passOnStoreError: true,
   store: redisStore("rl:auth:"),
 });
 
@@ -52,6 +79,7 @@ export const otpVerifyLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again in an hour." },
+  passOnStoreError: true,
   store: redisStore("rl:otp-verify:"),
 });
 
@@ -63,6 +91,7 @@ export const oauthLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again in 15 minutes." },
+  passOnStoreError: true,
   store: redisStore("rl:oauth:"),
 });
 
@@ -74,6 +103,7 @@ export const generalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: "Too many requests, please try again later." },
+  passOnStoreError: true,
   store: redisStore("rl:general:"),
 });
 

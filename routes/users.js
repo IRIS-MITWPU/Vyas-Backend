@@ -7,10 +7,12 @@ import {
   resetPassword,
   verifyEmail,
   resendVerification,
+  cookieOptions,
 } from "../controllers/userController.js";
 import { protect, adminOnly } from "../middlewares/authMiddleware.js";
 import { loginLimiter, authLimiter, otpVerifyLimiter, otpEmailLimiter } from "../middlewares/rateLimiter.js";
 import pool from "../database/db.js";
+import { logAuditEvent } from "../services/auditLog.js";
 
 const router = express.Router();
 
@@ -87,13 +89,33 @@ router.patch("/me", protect, async (req, res) => {
 // ==============================
 // POST /user/logout — clear auth cookie
 // ==============================
+// Cleared with the same attributes it was set with — a clearCookie whose
+// sameSite/secure don't match the original isn't guaranteed to remove it.
+// (maxAge is ignored by clearCookie, which sets its own expiry.)
 router.post("/logout", (req, res) => {
-  res.clearCookie("token", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "Strict",
-  });
+  res.clearCookie("token", cookieOptions);
   res.json({ success: true, message: "Logged out" });
+});
+
+// ==============================
+// POST /user/logout-all — revoke every session for this user
+// ==============================
+// Bumping token_version invalidates every JWT already issued to this user.
+// Other devices lose REST access on their next request, and their sockets
+// drop at the next reconnect (sockets/index.js re-checks token_version).
+router.post("/logout-all", protect, async (req, res) => {
+  try {
+    await pool.query(
+      "UPDATE profiles SET token_version = token_version + 1 WHERE id = $1",
+      [req.user.id],
+    );
+    logAuditEvent({ actorUserId: req.user.id, action: "session.revoked_all" });
+    res.clearCookie("token", cookieOptions);
+    res.json({ success: true, message: "Logged out of all devices" });
+  } catch (err) {
+    console.error("Error revoking sessions:", err);
+    res.status(500).json({ success: false, error: "Failed to log out of all devices" });
+  }
 });
 
 // ==============================
@@ -159,6 +181,13 @@ router.patch("/:id/admin", protect, adminOnly, async (req, res) => {
     }
 
     const user = result.rows[0];
+    logAuditEvent({
+      actorUserId: req.user.id,
+      action: "user.admin_toggled",
+      targetType: "profile",
+      targetId: user.id,
+      metadata: { is_admin: user.is_admin },
+    });
     res.json({
       success: true,
       message: `${user.full_name} is now ${user.is_admin ? "an admin" : "a regular user"}`,

@@ -21,7 +21,7 @@ const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const ADMIN_EMAIL = "admin@mitwpu.edu.in";
 const ADMIN_PASSWORD = "Admin@1234";
 
-let token;
+let authCookie;
 let buildingId, floorId, roomId;
 let bookingIds = [];
 let start, end;
@@ -46,11 +46,13 @@ before(async () => {
   });
   const loginBody = await loginRes.json();
   assert.equal(loginRes.status, 200, "admin login must succeed for this test to run");
-  token = loginBody.token;
+  // The JWT is delivered only as an httpOnly cookie now — it is deliberately
+  // no longer echoed in the response body (it would be readable by page JS).
+  authCookie = loginRes.headers.getSetCookie().find((c) => c.startsWith("token=")).split(";")[0];
 
   const authHeaders = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
+    Cookie: authCookie,
   };
 
   const buildingRes = await fetch(`${BASE_URL}/buildings`, {
@@ -83,7 +85,7 @@ before(async () => {
 });
 
 after(async () => {
-  const authHeaders = { Authorization: `Bearer ${token}` };
+  const authHeaders = { Cookie: authCookie };
   for (const id of bookingIds) {
     await fetch(`${BASE_URL}/booking/${id}`, { method: "DELETE", headers: authHeaders }).catch(() => {});
   }
@@ -104,7 +106,7 @@ test("two simultaneous bookings for the same room+slot — exactly one succeeds"
   const bookRoom = () =>
     fetch(`${BASE_URL}/booking`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: { "Content-Type": "application/json", Cookie: authCookie },
       body: payload,
     }).then(async (res) => ({ status: res.status, body: await res.json() }));
 

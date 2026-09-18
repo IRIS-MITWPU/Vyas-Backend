@@ -9,7 +9,7 @@
     "seed": "node database/seed.js",
     "db:schema": "psql $DATABASE_URL -f database/schema.sql",
     "email:worker": "node workers/emailWorker.js",
-    "test": "node --test tests/auth.test.js tests/concurrency.test.js"
+    "test": "node --test tests/auth.test.js tests/concurrency.test.js tests/security.test.js"
   },
   "keywords": [],
   "author": "",
@@ -36,7 +36,7 @@
     "morgan": "^1.10.1",
     "multer": "^2.2.0",
     "multer-s3": "^3.0.1",
-    "nodemailer": "^8.0.7",
+    "nodemailer": "^10.0.10",
     "nodemon": "^3.1.10",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",

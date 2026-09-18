@@ -9,6 +9,7 @@ import { enqueueEmail } from "../services/emailQueue.js";
 import { sendError } from "../utils/errorResponse.js";
 import { encryptOtp } from "../utils/otpCrypto.js";
 import { isAllowedDomain } from "../utils/emailDomain.js";
+import { logAuditEvent } from "../services/auditLog.js";
 
 // ============================================================
 // Validation schemas
@@ -46,15 +47,30 @@ const resendVerificationSchema = z.object({
 // Helpers
 // ============================================================
 const isProduction = process.env.NODE_ENV === "production";
+
+// Session lifetime. This is an *idle* window, not a hard cap: `protect`
+// re-issues the cookie on activity once it's more than halfway expired
+// (see SLIDE_AFTER_MS in middlewares/authMiddleware.js), so an active user
+// is never logged out mid-session while an abandoned/stolen cookie dies
+// within JWT_EXPIRY of its last use rather than the old flat 30 days.
+// ponytail: sliding single token, not access+refresh rotation — `protect`
+// already re-checks token_version from Postgres on every request, so
+// revocation is instant without a refresh-token table. Move to rotating
+// refresh tokens if stolen-token *replay detection* is ever needed.
+const JWT_EXPIRY_HOURS = Number(process.env.JWT_EXPIRY_HOURS) || 8;
+export const JWT_EXPIRY_MS = JWT_EXPIRY_HOURS * 60 * 60 * 1000;
+
 export const cookieOptions = {
   httpOnly: true,
   secure: isProduction, // requires HTTPS; only true in production
   sameSite: "Lax", // API is now served same-origin via the Vercel /api rewrite in production
-  maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+  maxAge: JWT_EXPIRY_MS,
 };
 
 export const generateToken = (id, tokenVersion) =>
-  jwt.sign({ id, token_version: tokenVersion }, process.env.JWT_SECRET, { expiresIn: "30d" });
+  jwt.sign({ id, token_version: tokenVersion }, process.env.JWT_SECRET, {
+    expiresIn: JWT_EXPIRY_MS / 1000, // jsonwebtoken takes seconds when given a number
+  });
 
 // ============================================================
 // Email verification (OTP) helpers
@@ -140,10 +156,20 @@ export async function login(req, res) {
 
   try {
     const user = await findUserByEmail(email);
-    if (!user) return res.status(401).json({ error: "Invalid credentials" });
+    if (!user) {
+      logAuditEvent({ action: "login.failed", metadata: { email, reason: "unknown_user" } });
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
+    if (!isMatch) {
+      logAuditEvent({
+        actorUserId: user.user_id,
+        action: "login.failed",
+        metadata: { email, reason: "bad_password" },
+      });
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
 
     if (!user.email_verified) {
       return res.status(403).json({
@@ -155,6 +181,7 @@ export async function login(req, res) {
 
     const token = generateToken(user.user_id, user.token_version);
     res.cookie("token", token, cookieOptions);
+    logAuditEvent({ actorUserId: user.user_id, action: "login.succeeded", metadata: { email } });
     res.json({
       message: "Login successful",
       user: {
@@ -163,7 +190,6 @@ export async function login(req, res) {
         email: user.email,
         is_admin: user.is_admin,
       },
-      token,
     });
   } catch (err) {
     sendError(res, 500, "Login failed", err);
@@ -255,6 +281,8 @@ export async function resetPassword(req, res) {
       [row.user_id],
     );
 
+    logAuditEvent({ actorUserId: row.user_id, action: "password.reset" });
+
     await pool.query("DELETE FROM password_reset_tokens WHERE id = $1", [
       row.id,
     ]);
@@ -335,7 +363,6 @@ export async function verifyEmail(req, res) {
     res.json({
       message: "Email verified successfully",
       user: { id: user.id, full_name: user.full_name, email: user.email, is_admin: user.is_admin },
-      token,
     });
   } catch (err) {
     sendError(res, 500, "Verification failed", err);

@@ -5,6 +5,7 @@ import pool from "../database/db.js";
 import { protect, adminOnly } from "../middlewares/authMiddleware.js";
 import { enqueueEmail } from "../services/emailQueue.js";
 import { sendError } from "../utils/errorResponse.js";
+import { logAuditEvent } from "../services/auditLog.js";
 
 const router = express.Router();
 
@@ -268,7 +269,7 @@ router.get("/my", protect, async (req, res) => {
 // ==============================
 router.get("/admin/all", protect, adminOnly, async (req, res) => {
   try {
-    const { date, room, status } = req.query;
+    const { date, startDate, endDate, room, status } = req.query;
     // Frontend's ReportGenerator.tsx/AdminDashboard.tsx intentionally call
     // this with `?limit=10000` as a "give me everything" workaround (see
     // REMAINING.md) — clamp against garbage/abusive values without breaking
@@ -297,7 +298,23 @@ router.get("/admin/all", protect, adminOnly, async (req, res) => {
       params.push(date);
       paramIndex++;
     }
-    
+
+    // Date range, so reports don't have to pull everything and filter
+    // client-side. Half-open and sargable (>= / <) rather than DATE(start_time)
+    // like the single-day filter above, so an index on start_time is usable.
+    // endDate is inclusive of the whole day: < endDate + 1 day.
+    if (startDate) {
+      query += ` AND b.start_time >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+    }
+
+    if (endDate) {
+      query += ` AND b.start_time < ($${paramIndex}::date + INTERVAL '1 day')`;
+      params.push(endDate);
+      paramIndex++;
+    }
+
     if (room) {
       query += ` AND b.room_id = $${paramIndex}`;
       params.push(room);
@@ -333,6 +350,8 @@ router.get("/admin/all", protect, adminOnly, async (req, res) => {
       },
       filters: {
         date: date || null,
+        startDate: startDate || null,
+        endDate: endDate || null,
         room: room || null,
         status: status || null
       }
@@ -580,6 +599,15 @@ router.patch("/:id", protect, async (req, res) => {
     const result = await pool.query(query, values);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Booking not found or access denied" });
+    }
+    if (status !== undefined) {
+      logAuditEvent({
+        actorUserId: userId,
+        action: `booking.status_${status}`,
+        targetType: "booking",
+        targetId: bookingId,
+        metadata: { status, by_admin: isAdmin },
+      });
     }
     res.json({ success: true, booking: result.rows[0] });
   } catch (err) {
