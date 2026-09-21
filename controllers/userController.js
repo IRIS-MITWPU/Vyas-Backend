@@ -14,8 +14,17 @@ import { logAuditEvent } from "../services/auditLog.js";
 // ============================================================
 // Validation schemas
 // ============================================================
+// Shared by register and PATCH /user/me. full_name is display text only —
+// it never grants access (see migration 010) — but keep it sane.
+export const fullNameSchema = z
+  .string()
+  .trim()
+  .min(1, "Full name is required")
+  .max(100, "Full name must be at most 100 characters")
+  .regex(/^\P{Cc}*$/u, "Full name must not contain control characters");
+
 const registerSchema = z.object({
-  full_name: z.string().min(1, "Full name is required"),
+  full_name: fullNameSchema,
   email: z.string().email("Invalid email format"),
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
@@ -34,9 +43,12 @@ const resetPasswordSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
+// password: proves the verifier is the person who registered, not just the
+// mailbox owner — see the F0 note in verifyEmail.
 const verifyEmailSchema = z.object({
   email: z.string().email("Invalid email format"),
   code: z.string().regex(/^\d{6}$/, "Code must be 6 digits"),
+  password: z.string().min(1, "Password is required"),
 });
 
 const resendVerificationSchema = z.object({
@@ -69,6 +81,7 @@ export const cookieOptions = {
 
 export const generateToken = (id, tokenVersion) =>
   jwt.sign({ id, token_version: tokenVersion }, process.env.JWT_SECRET, {
+    algorithm: "HS256",
     expiresIn: JWT_EXPIRY_MS / 1000, // jsonwebtoken takes seconds when given a number
   });
 
@@ -79,6 +92,11 @@ const OTP_TTL_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_RESEND_MAX_PER_HOUR = 3;
 const OTP_RESEND_COOLDOWN_SECONDS = 60;
+const RESET_COOLDOWN_MINUTES = 5;
+
+// Reset tokens are 32 random bytes, so a fast unsalted hash is enough: the DB
+// holds only sha256(token), and the plaintext exists only in the emailed link.
+const hashResetToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
 // Precomputed once so the "email not found" / "already verified" branches of
 // verifyEmail can spend the same bcrypt cost as a real comparison — otherwise
@@ -216,6 +234,17 @@ export async function forgotPassword(req, res) {
     const user = await findUserByEmail(email);
     if (!user) return res.json(genericResponse);
 
+    // Cooldown (audit F8): a still-valid link issued in the last few minutes
+    // means this is a repeat — don't delete it (the user may be mid-reset)
+    // and don't mail another. Same generic response either way.
+    const recent = await pool.query(
+      `SELECT 1 FROM password_reset_tokens
+       WHERE user_id = $1 AND expires_at > NOW()
+         AND created_at > NOW() - make_interval(mins => $2)`,
+      [user.user_id, RESET_COOLDOWN_MINUTES]
+    );
+    if (recent.rowCount > 0) return res.json(genericResponse);
+
     // Invalidate any existing tokens for this user
     await pool.query("DELETE FROM password_reset_tokens WHERE user_id = $1", [
       user.user_id,
@@ -225,8 +254,8 @@ export async function forgotPassword(req, res) {
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
     await pool.query(
-      "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
-      [user.user_id, token, expiresAt],
+      "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+      [user.user_id, hashResetToken(token), expiresAt],
     );
 
     const resetUrl = `${process.env.FRONTEND_ORIGIN}/reset-password?token=${token}`;
@@ -252,8 +281,8 @@ export async function resetPassword(req, res) {
 
   try {
     const result = await pool.query(
-      "SELECT * FROM password_reset_tokens WHERE token = $1",
-      [token],
+      "SELECT * FROM password_reset_tokens WHERE token_hash = $1",
+      [hashResetToken(token)],
     );
 
     if (result.rows.length === 0) {
@@ -303,7 +332,7 @@ export async function verifyEmail(req, res) {
     return res.status(400).json({ errors: parsed.error.flatten().fieldErrors });
   }
 
-  const { email, code } = parsed.data;
+  const { email, code, password } = parsed.data;
 
   // "Invalid code" is deliberately reused for every case that would otherwise
   // reveal whether this email is registered (not found / already verified) —
@@ -319,7 +348,9 @@ export async function verifyEmail(req, res) {
 
   try {
     const userResult = await pool.query(
-      "SELECT id, full_name, email, is_admin, token_version, email_verified FROM profiles WHERE email = $1",
+      `SELECT p.id, p.full_name, p.email, p.is_admin, p.email_verified, a.password_hash
+       FROM profiles p LEFT JOIN user_auth a ON a.user_id = p.id
+       WHERE p.email = $1`,
       [email]
     );
 
@@ -344,21 +375,49 @@ export async function verifyEmail(req, res) {
 
     const row = codeResult.rows[0];
 
-    if (new Date(row.expires_at) < new Date() || row.attempts >= OTP_MAX_ATTEMPTS) {
+    if (new Date(row.expires_at) < new Date()) {
       return expiredCodeResponse();
     }
 
-    const isMatch = await bcrypt.compare(code, row.code_hash);
-    if (!isMatch) {
-      await pool.query("UPDATE email_verification_codes SET attempts = attempts + 1 WHERE id = $1", [row.id]);
+    // Claim an attempt atomically *before* evaluating the guess. A
+    // read-then-increment let parallel requests all see attempts < 5 and
+    // each get a guess evaluated; this conditional UPDATE can succeed at most
+    // OTP_MAX_ATTEMPTS times per code, however many requests race.
+    const claimed = await pool.query(
+      `UPDATE email_verification_codes SET attempts = attempts + 1
+       WHERE id = $1 AND consumed_at IS NULL AND attempts < $2
+       RETURNING id`,
+      [row.id, OTP_MAX_ATTEMPTS]
+    );
+    if (claimed.rowCount === 0) return expiredCodeResponse();
+
+    // F0: the code proves mailbox control, the password proves this is the
+    // person who registered. Both are required, and a wrong password is
+    // indistinguishable from a wrong code (no oracle for either). Both
+    // compares always run so timing doesn't reveal which one failed.
+    const [codeOk, passwordOk] = await Promise.all([
+      bcrypt.compare(code, row.code_hash),
+      bcrypt.compare(password, user.password_hash ?? DUMMY_CODE_HASH),
+    ]);
+    if (!codeOk || !passwordOk || !user.password_hash) {
       return invalidCodeResponse();
     }
 
-    await pool.query("UPDATE email_verification_codes SET consumed_at = NOW() WHERE id = $1", [row.id]);
-    await pool.query("UPDATE profiles SET email_verified = TRUE WHERE id = $1", [user.id]);
+    const consumed = await pool.query(
+      "UPDATE email_verification_codes SET consumed_at = NOW() WHERE id = $1 AND consumed_at IS NULL",
+      [row.id]
+    );
+    if (consumed.rowCount === 0) return invalidCodeResponse(); // lost a race with a concurrent verify
+
+    // Bumping token_version drops any session issued before verification.
+    const { rows: [verified] } = await pool.query(
+      `UPDATE profiles SET email_verified = TRUE, token_version = token_version + 1
+       WHERE id = $1 RETURNING token_version`,
+      [user.id]
+    );
     await enqueueEmail("welcome", { to: user.email, fullName: user.full_name });
 
-    const token = generateToken(user.id, user.token_version);
+    const token = generateToken(user.id, verified.token_version);
     res.cookie("token", token, cookieOptions);
     res.json({
       message: "Email verified successfully",

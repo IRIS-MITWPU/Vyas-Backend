@@ -2,7 +2,7 @@
 import express from 'express';
 import multer from 'multer';
 import multerS3 from 'multer-s3';
-import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import pool from '../database/db.js';
@@ -13,6 +13,7 @@ import {
 } from '../services/importQueue.js';
 import { logEvent } from '../services/importProgress.js';
 import { abortActiveCall } from '../services/importAbortRegistry.js';
+import { contentMatchesMime } from '../utils/fileSniff.js';
 
 const router = express.Router();
 
@@ -48,6 +49,23 @@ const upload = multer({
     }
   },
 });
+
+// multer-s3 has already streamed the files to S3 by the time the handler
+// runs, so every early exit (bad job, bad content, DB error) must delete them
+// or they're orphaned in the bucket with no DB row pointing at them.
+async function discardUploads(files = []) {
+  await Promise.allSettled(
+    files.map((f) => s3Client.send(new DeleteObjectCommand({ Bucket: IMPORT_CONFIG.s3Bucket, Key: f.key })))
+  );
+}
+
+// Reads the first bytes back from S3 and checks them against the declared type.
+async function uploadContentIsValid(file) {
+  const { Body } = await s3Client.send(
+    new GetObjectCommand({ Bucket: IMPORT_CONFIG.s3Bucket, Key: file.key, Range: 'bytes=0-4095' })
+  );
+  return contentMatchesMime(Buffer.from(await Body.transformToByteArray()), file.mimetype);
+}
 
 // ==============================
 // POST /timetable-import/jobs — create a new import job
@@ -86,9 +104,11 @@ router.post(
         [jobId]
       );
       if (!jobCheck.rows.length) {
+        await discardUploads(req.files);
         return res.status(404).json({ success: false, error: 'Import job not found' });
       }
       if (jobCheck.rows[0].status !== 'CREATED') {
+        await discardUploads(req.files);
         return res
           .status(409)
           .json({ success: false, error: 'Files can only be added to a CREATED job' });
@@ -97,19 +117,28 @@ router.post(
         return res.status(400).json({ success: false, error: 'No files uploaded' });
       }
 
-      const savedFiles = [];
       for (const file of req.files) {
-        const result = await pool.query(
-          `INSERT INTO timetable_import_files
-             (job_id, original_filename, storage_path, mime_type, file_size_bytes)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-          [jobId, file.originalname, file.key, file.mimetype, file.size]
-        );
-        savedFiles.push(result.rows[0]);
+        if (!(await uploadContentIsValid(file))) {
+          await discardUploads(req.files);
+          return res.status(400).json({
+            success: false,
+            error: `"${file.originalname}" does not look like a valid ${file.mimetype} file`,
+          });
+        }
       }
 
-      res.status(201).json({ success: true, files: savedFiles });
+      // One statement, so a DB failure can't leave some files registered.
+      const rows = req.files;
+      const result = await pool.query(
+        `INSERT INTO timetable_import_files
+           (job_id, original_filename, storage_path, mime_type, file_size_bytes)
+         SELECT $1, * FROM unnest($2::text[], $3::text[], $4::text[], $5::bigint[]) RETURNING *`,
+        [jobId, rows.map((f) => f.originalname), rows.map((f) => f.key), rows.map((f) => f.mimetype), rows.map((f) => f.size)]
+      );
+
+      res.status(201).json({ success: true, files: result.rows });
     } catch (err) {
+      await discardUploads(req.files);
       console.error('Error uploading import files:', err);
       res.status(500).json({ success: false, error: 'Failed to upload files' });
     }

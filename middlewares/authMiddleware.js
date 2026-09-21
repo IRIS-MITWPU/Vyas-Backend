@@ -18,7 +18,7 @@ const SLIDE_AFTER_MS = JWT_EXPIRY_MS / 2;
  * it. Throws on failure; returns `{ user, decoded }` on success.
  */
 export const verifySessionToken = async (token) => {
-  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
 
   const userResult = await pool.query(
     "SELECT id, full_name, email, is_admin, token_version FROM profiles WHERE id = $1",

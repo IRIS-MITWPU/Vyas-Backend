@@ -10,7 +10,8 @@ import IORedis from 'ioredis';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import pool from '../database/db.js';
 import { IMPORT_CONFIG } from '../config/importConfig.js';
-import { extractTextFromFile } from '../services/extractionService.js';
+import { extractInWorker } from '../services/extractionRunner.js';
+import { contentMatchesMime } from '../utils/fileSniff.js';
 import { ocrPdf } from '../services/ocrService.js';
 import { normalizeExtractedText } from '../services/normalizationService.js';
 import { extractLecturesFromText, computeJobDeadlineMs, retryChunk } from '../services/llmService.js';
@@ -64,7 +65,11 @@ async function processImportJob({ jobId }) {
       let panels = [];
       try {
         const fileBuffer = await fetchFileBuffer(file.storage_path);
-        const extracted = await extractTextFromFile(fileBuffer, file.mime_type);
+        if (!contentMatchesMime(fileBuffer.subarray(0, 4096), file.mime_type)) {
+          throw new Error('File content does not match its declared type');
+        }
+        // Runs in a capped worker thread: a hostile file fails only itself.
+        const extracted = await extractInWorker(fileBuffer, file.mime_type);
         panels = extracted.panels || [];
         if (extracted.needsOcr) {
           if (await isCancelled(jobId)) { await handleCancellation(jobId); return; }
@@ -349,7 +354,14 @@ export function startImportPipelineWorker() {
     maxRetriesPerRequest: null,
   });
 
-  const worker = new Worker('timetable-import', processJob, { connection, concurrency: 1 });
+  const worker = new Worker('timetable-import', processJob, {
+    connection,
+    concurrency: 1,
+    // A job whose worker died mid-run is failed, not re-run — re-running a
+    // poison file would just kill the worker again. Reconciliation then
+    // marks its DB row failed.
+    maxStalledCount: 0,
+  });
 
   worker.on('completed', (job) => console.log(`[ImportWorker] Job ${job.id} (${job.name}) completed`));
   worker.on('failed', (job, err) => console.error(`[ImportWorker] Job ${job?.id} (${job?.name}) failed:`, err.message));

@@ -8,6 +8,7 @@
 // tried next but Google cut off new-project access to it (404 on every
 // call), so this is now on `gemini-3.1-flash-lite`.
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { z } from 'zod';
 import { IMPORT_CONFIG } from '../config/importConfig.js';
 import { isCancelled, updateLlmProgress, markLlmRequestStarted } from './importProgress.js';
 import { registerAbortController, unregisterAbortController } from './importAbortRegistry.js';
@@ -200,7 +201,18 @@ class GeminiProvider {
 }
 
 // ─── Response parsing ────────────────────────────────────────────────────────
-function parseAndValidateLlmResponse(responseText) {
+// LLM output is untrusted input: normalizeLlmLecture() calls string methods on
+// these fields and the raw object is persisted verbatim, so bound the shape
+// and size of each lecture. Unknown keys are stripped (z.object default).
+const llmText = z.string().max(500).nullish();
+const llmNumberish = z.union([z.number(), z.string().max(50)]).nullish();
+const llmLectureSchema = z.object({
+  teacherName: llmText, subject: llmText, roomNumber: llmText, weekday: llmText,
+  startTime: llmText, batch: llmText, lectureType: llmText,
+  durationMinutes: llmNumberish, confidence: llmNumberish,
+});
+
+export function parseAndValidateLlmResponse(responseText) {
   // Strip markdown code fences if LLM added them despite instructions
   let cleaned = responseText.trim();
   cleaned = cleaned.replace(/^```json\s*/i, '').replace(/\s*```$/i, '');
@@ -217,7 +229,19 @@ function parseAndValidateLlmResponse(responseText) {
     throw new Error(`LLM response missing "lectures" array: ${cleaned.slice(0, 200)}`);
   }
 
-  return parsed;
+  // Keep the well-formed lectures; if entries came back but none are usable,
+  // throw so the chunk is retried like any other bad response.
+  const lectures = parsed.lectures.flatMap((l) => {
+    const r = llmLectureSchema.safeParse(l);
+    return r.success ? [r.data] : [];
+  });
+  if (parsed.lectures.length > 0 && lectures.length === 0) {
+    throw new Error('LLM response contained no valid lecture objects');
+  }
+  if (lectures.length < parsed.lectures.length) {
+    console.warn(`[IMPORT] dropped ${parsed.lectures.length - lectures.length} malformed lecture(s) from LLM response`);
+  }
+  return { ...parsed, lectures };
 }
 
 // ─── Text chunking ────────────────────────────────────────────────────────────

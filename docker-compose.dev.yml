@@ -1,0 +1,35 @@
+# Local dev only — throwaway Postgres + Redis. The app itself runs on the host (npm run dev).
+#   docker compose -f docker-compose.dev.yml up -d
+#   npm run seed
+# Matching .env values:
+#   DB_HOST=localhost  DB_PORT=5433  DB_USER=postgres  DB_PASSWORD=postgres  DB_NAME=vyas
+#   REDIS_URL=redis://localhost:6381
+# Reset everything (re-runs schema + migrations): docker compose -f docker-compose.dev.yml down -v
+# Ports 5433/6381 avoid clashing with a native Postgres on 5432 / other Redis on 6379-6380.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: vyas
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pg-dev-data:/var/lib/postgresql/data
+      - ./database:/vyas-db:ro
+      - ./database/dev-init.sh:/docker-entrypoint-initdb.d/dev-init.sh:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "vyas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "127.0.0.1:6381:6379"
+
+volumes:
+  pg-dev-data:

@@ -46,7 +46,7 @@ async function main() {
   const verifiedUserId = profileRes.rows[0].id;
   await pool.query("INSERT INTO user_auth (user_id, password_hash) VALUES ($1, $2)", [verifiedUserId, passwordHash]);
 
-  const reVerify = await post("/user/verify-email", { email: verifiedEmail, code: "000000" });
+  const reVerify = await post("/user/verify-email", { email: verifiedEmail, code: "000000", password: "irrelevant" });
   console.log(reVerify.status, reVerify.body);
   check(
     "already-verified email gets the same generic INVALID_CODE shape (no distinct 'already verified' leak)",

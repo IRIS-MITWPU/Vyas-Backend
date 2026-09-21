@@ -1,9 +1,22 @@
 // routes/timetable.js
 import express from "express";
 import pool from "../database/db.js";
+import { z } from "zod";
 import { protect, adminOnly } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
+
+// teacherProfileId: the profile allowed to cancel the template's slots
+// (besides admins). null unlinks. Returns an error message, or null if valid.
+const teacherProfileIdSchema = z.string().uuid().nullable();
+async function checkTeacherProfileId(value) {
+  if (!teacherProfileIdSchema.safeParse(value).success) {
+    return "teacherProfileId must be a profile UUID or null";
+  }
+  if (value === null) return null;
+  const { rowCount } = await pool.query("SELECT 1 FROM profiles WHERE id = $1", [value]);
+  return rowCount ? null : "teacherProfileId does not match any user";
+}
 
 // ==============================
 // GET /room/:id/effective-timetable?weekStart=YYYY-MM-DD
@@ -172,6 +185,7 @@ router.post("/room/:id/timetable", protect, adminOnly, async (req, res) => {
     notes,
     repeatIntervalWeeks = 2,
     effectiveFrom,
+    teacherProfileId = null,
   } = req.body;
 
   if (
@@ -198,11 +212,14 @@ router.post("/room/:id/timetable", protect, adminOnly, async (req, res) => {
   }
 
   try {
+    const profileError = await checkTeacherProfileId(teacherProfileId);
+    if (profileError) return res.status(400).json({ error: profileError });
+
     const result = await pool.query(
       `INSERT INTO room_timetable_templates
          (room_id, teacher_name, title, weekday, start_time, duration_minutes,
-          notes, repeat_interval_weeks, effective_from, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          notes, repeat_interval_weeks, effective_from, created_by, teacher_profile_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         roomId,
@@ -215,6 +232,7 @@ router.post("/room/:id/timetable", protect, adminOnly, async (req, res) => {
         repeatIntervalWeeks,
         effectiveFrom || new Date().toISOString().split("T")[0],
         req.user.id,
+        teacherProfileId,
       ],
     );
 
@@ -245,6 +263,7 @@ router.put("/timetable/:id", protect, adminOnly, async (req, res) => {
     repeatIntervalWeeks,
     effectiveFrom,
     isActive,
+    teacherProfileId,
   } = req.body;
 
   const fields = [];
@@ -296,12 +315,21 @@ router.put("/timetable/:id", protect, adminOnly, async (req, res) => {
     fields.push(`is_active = $${i++}`);
     values.push(isActive);
   }
+  if (teacherProfileId !== undefined) {
+    fields.push(`teacher_profile_id = $${i++}`);
+    values.push(teacherProfileId);
+  }
 
   if (fields.length === 0) {
     return res.status(400).json({ error: "No fields to update" });
   }
 
   try {
+    if (teacherProfileId !== undefined) {
+      const profileError = await checkTeacherProfileId(teacherProfileId);
+      if (profileError) return res.status(400).json({ error: profileError });
+    }
+
     values.push(templateId);
     const result = await pool.query(
       `UPDATE room_timetable_templates SET ${fields.join(", ")} WHERE id = $${i} RETURNING *`,
@@ -350,7 +378,8 @@ router.delete("/timetable/:id", protect, adminOnly, async (req, res) => {
 // POST /timetable/:id/exception
 // Cancel a template slot for a specific week.
 // Delegates to the PostgreSQL function create_template_exception() which
-// enforces: admin OR the teacher named on the template.
+// enforces: admin OR the profile linked via teacher_profile_id (never the
+// teacher_name text — users can rename themselves; audit F4).
 // ==============================
 router.post("/timetable/:id/exception", protect, async (req, res) => {
   const templateId = req.params.id;

@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from "uuid";
 import { verifySessionToken } from "../middlewares/authMiddleware.js";
 import cookie from "cookie";
 import pool from "../database/db.js";
+import { allowedOrigins } from "../config/origins.js";
 
 // Non-breaking minimum pending an owner decision on whether room calendars
 // are intentionally institution-wide visible (see FINDINGS.md, sec-3):
@@ -96,7 +97,7 @@ const MAX_JOINS_PER_SOCKET = 20;
 export default async function initSockets(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.FRONTEND_ORIGIN || "http://localhost:5173",
+      origin: allowedOrigins, // same list as Express CORS (config/origins.js)
       credentials: true,
     },
   });

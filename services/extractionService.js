@@ -4,6 +4,11 @@ import XLSX from 'xlsx';
 import { IMPORT_CONFIG } from '../config/importConfig.js';
 import { parseSheetStructure } from './timetableStructureParser.js';
 
+// Thrown when a file exceeds an extraction cap. Propagates out of the
+// per-sheet/PDF fallbacks below so the whole file is rejected (only that file
+// fails — see the worker loop) instead of being silently half-parsed.
+export class ImportLimitError extends Error {}
+
 /**
  * Extract raw text from a file based on its mime type.
  * Returns { text: string, needsOcr: boolean, panels: PanelInfo[] }
@@ -11,6 +16,14 @@ import { parseSheetStructure } from './timetableStructureParser.js';
  * panel/legend concept to extract)
  */
 export async function extractTextFromFile(buffer, mimeType) {
+  const result = await extractByType(buffer, mimeType);
+  if (result.text.length > IMPORT_CONFIG.maxExtractedChars) {
+    throw new ImportLimitError('File contains too much text to import');
+  }
+  return result;
+}
+
+async function extractByType(buffer, mimeType) {
   if (mimeType === 'application/pdf') {
     return { ...(await extractFromPdf(buffer)), panels: [] };
   }
@@ -30,11 +43,15 @@ export async function extractTextFromFile(buffer, mimeType) {
 async function extractFromPdf(buffer) {
   const parser = new PDFParse({ data: buffer });
   try {
-    const result = await parser.getText();
+    const result = await parser.getText({ first: IMPORT_CONFIG.pdfMaxPages });
+    if (result.total > IMPORT_CONFIG.pdfMaxPages) {
+      throw new ImportLimitError(`PDF has too many pages (${result.total}, max ${IMPORT_CONFIG.pdfMaxPages})`);
+    }
     const text = result.text || '';
     const needsOcr = text.trim().length < IMPORT_CONFIG.ocrTextThreshold;
     return { text, needsOcr };
   } catch (err) {
+    if (err instanceof ImportLimitError) throw err;
     // A corrupted/unreadable text layer is equivalent to a scanned PDF — fall through to OCR.
     console.error('pdf-parse failed, falling back to OCR:', err.message);
     return { text: '', needsOcr: true };
@@ -84,18 +101,37 @@ async function extractFromExcel(buffer) {
   const workbook = XLSX.read(buffer, { type: 'buffer' });
   const textParts = [];
   const allPanels = [];
+  let mergeFilled = 0;
+  if (workbook.SheetNames.length > IMPORT_CONFIG.maxSheets) {
+    throw new ImportLimitError('Spreadsheet too large to import (too many sheets)');
+  }
 
   for (const sheetName of workbook.SheetNames) {
     try {
       const sheet = workbook.Sheets[sheetName];
 
-      // Unmerge cells: fill merged regions with top-left value
-      if (sheet['!merges']) {
+      // The declared range drives sheet_to_json's allocation (rows x cols,
+      // even when empty), so an inflated !ref alone can exhaust memory.
+      const ref = sheet['!ref'] ? XLSX.utils.decode_range(sheet['!ref']) : null;
+      if (ref && (ref.e.r - ref.s.r + 1) * (ref.e.c - ref.s.c + 1) > IMPORT_CONFIG.maxSheetCells) {
+        throw new ImportLimitError('Spreadsheet too large to import');
+      }
+
+      // Unmerge cells: fill merged regions with top-left value. Each merge is
+      // clamped to the sheet's declared range (a merge can claim
+      // A1:XFD1048576) and the total filled cells are capped.
+      if (sheet['!merges'] && ref) {
         for (const merge of sheet['!merges']) {
           const topLeft = XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c });
           const topLeftValue = sheet[topLeft]?.v;
-          for (let r = merge.s.r; r <= merge.e.r; r++) {
-            for (let c = merge.s.c; c <= merge.e.c; c++) {
+          const r1 = Math.min(merge.e.r, ref.e.r);
+          const c1 = Math.min(merge.e.c, ref.e.c);
+          mergeFilled += Math.max(0, r1 - merge.s.r + 1) * Math.max(0, c1 - merge.s.c + 1);
+          if (mergeFilled > IMPORT_CONFIG.maxMergeFillCells) {
+            throw new ImportLimitError('Spreadsheet too large to import (merged regions)');
+          }
+          for (let r = merge.s.r; r <= r1; r++) {
+            for (let c = merge.s.c; c <= c1; c++) {
               const cellAddr = XLSX.utils.encode_cell({ r, c });
               if (!sheet[cellAddr]) {
                 sheet[cellAddr] = { v: topLeftValue, t: 's' };
@@ -145,6 +181,7 @@ async function extractFromExcel(buffer) {
       textParts.push(`Sheet: ${sheetName}`);
       textParts.push(...gridLines.map(expandMultiDivisionLine));
     } catch (err) {
+      if (err instanceof ImportLimitError) throw err;
       // One sheet's failure (e.g. a malformed merge range) must not abort
       // extraction of the file's other sheets — same "one bad file doesn't
       // abort the job" design used elsewhere in this pipeline.
@@ -170,7 +207,12 @@ const DIVISION_SUFFIX_PATTERN = /([A-Za-z0-9&+./-]+(?:\s+[A-Za-z0-9&+./-]+)*)\s*
 // Only called on already-isolated cell text (see expandMultiDivisionLine),
 // never on a whole pipe-joined row — legend cells like "PE3-Gen AI" would
 // otherwise false-positive on the prefix pattern.
-function expandMultiDivisionCell(text) {
+// Real cells are <100 chars; longer ones are skipped so the patterns below
+// (nested quantifiers) can't be driven quadratic by a hostile cell.
+const MAX_EXPANDABLE_CELL_CHARS = 1000;
+
+export function expandMultiDivisionCell(text) {
+  if (text.length > MAX_EXPANDABLE_CELL_CHARS) return text;
   const prefixMatches = [...text.matchAll(DIVISION_PREFIX_PATTERN)];
   if (prefixMatches.length >= 1) {
     const parts = prefixMatches

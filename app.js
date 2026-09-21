@@ -26,6 +26,14 @@ const REQUIRED_ENV = [
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
   "GOOGLE_CALLBACK_URL",
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_USER",
+  "SMTP_PASS",
+  "SMTP_FROM",
+  "S3_BUCKET",
+  "AWS_REGION",
+  "GEMINI_API_KEY",
 ];
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length) {
@@ -49,14 +57,17 @@ const { default: pool }                  = await import("./database/db.js");
 
 // Email queue + Bull Board dashboard
 const { emailQueue }              = await import("./services/emailQueue.js");
-const { startEmailWorker }        = await import("./workers/emailWorker.js");
-const { startImportPipelineWorker } = await import("./workers/importPipelineWorker.js");
-const { startOtpCleanupSweep }    = await import("./services/otpCleanup.js");
+// Background jobs run in-process by default (dev). In production set
+// RUN_WORKERS=false and run `node worker.js` as its own service — the
+// PDF/XLSX/OCR libraries are then never even loaded in the API process.
+const RUN_WORKERS = process.env.RUN_WORKERS !== "false";
 const { createBullBoard }    = await import("@bull-board/api");
 const { BullMQAdapter }      = await import("@bull-board/api/bullMQAdapter");
 const { ExpressAdapter }     = await import("@bull-board/express");
 const { protect, adminOnly } = await import("./middlewares/authMiddleware.js");
 const { generalLimiter } = await import("./middlewares/rateLimiter.js");
+const { allowedOrigins }  = await import("./config/origins.js");
+const { originCheck }     = await import("./middlewares/originCheck.js");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -79,19 +90,15 @@ app.use(morgan("combined"));
 app.use(express.json());
 app.use(cookieParser());
 app.use(passport.initialize()); // no passport.session() — JWT-cookie sessions only, session:false everywhere
-const allowedOrigins = [
-  process.env.FRONTEND_ORIGIN || "https://vyas-web-app.vercel.app",
-  "http://localhost:5173",
-  "http://localhost:8080",
-].filter(Boolean);
+app.use(originCheck); // CSRF: allowed Origin required on cookie-authenticated writes
 
 app.use(
   cors({
-    origin: (origin, cb) => {
-      // Allow requests with no origin (e.g. curl, Postman)
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-      cb(new Error(`CORS: origin ${origin} not allowed`));
-    },
+    // Unlisted origins get no CORS headers (the browser won't expose the
+    // response) rather than an error: same-origin callers such as Bull Board
+    // also send an Origin, and writes from a bad origin are already refused
+    // with a 403 by originCheck above.
+    origin: (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin)),
     credentials: true,
   })
 );
@@ -124,7 +131,6 @@ app.get("/", (req, res) => {
   res.json({ status: "ok", message: "Vyas Backend is running" });
 });
 
-app.set('trust proxy', 1); // Trust first proxy (Railway's load balancer)
 // ============================================================
 // Routes
 // ============================================================
@@ -165,9 +171,16 @@ let importWorker;
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
-  emailWorker = startEmailWorker();
-  importWorker = startImportPipelineWorker();
-  startOtpCleanupSweep();
+  if (!RUN_WORKERS) return console.log("Background workers disabled (RUN_WORKERS=false) — run worker.js");
+  Promise.all([
+    import("./workers/emailWorker.js"),
+    import("./workers/importPipelineWorker.js"),
+    import("./services/otpCleanup.js"),
+  ]).then(([email, imp, otp]) => {
+    emailWorker = email.startEmailWorker();
+    importWorker = imp.startImportPipelineWorker();
+    otp.startOtpCleanupSweep();
+  }).catch((err) => { console.error("❌ Failed to start background workers:", err); process.exit(1); });
 });
 
 // ============================================================

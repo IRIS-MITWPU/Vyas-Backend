@@ -26,10 +26,10 @@ async function seed() {
     const {
       rows: [admin],
     } = await client.query(
-      `INSERT INTO profiles (full_name, email, is_admin)
-       VALUES ($1, $2, TRUE)
+      `INSERT INTO profiles (full_name, email, is_admin, email_verified)
+       VALUES ($1, $2, TRUE, TRUE)
        ON CONFLICT (email)
-       DO UPDATE SET full_name = EXCLUDED.full_name, is_admin = TRUE
+       DO UPDATE SET full_name = EXCLUDED.full_name, is_admin = TRUE, email_verified = TRUE
        RETURNING id`,
       ["Admin User", "admin@mitwpu.edu.in"],
     );
@@ -57,10 +57,10 @@ async function seed() {
       const {
         rows: [u],
       } = await client.query(
-        `INSERT INTO profiles (full_name, email)
-         VALUES ($1, $2)
+        `INSERT INTO profiles (full_name, email, email_verified)
+         VALUES ($1, $2, TRUE)
          ON CONFLICT (email)
-         DO UPDATE SET full_name = EXCLUDED.full_name
+         DO UPDATE SET full_name = EXCLUDED.full_name, email_verified = TRUE
          RETURNING id`,
         [f.name, f.email],
       );

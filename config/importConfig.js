@@ -9,6 +9,14 @@ export const IMPORT_CONFIG = {
   llmProvider: process.env.LLM_PROVIDER || 'gemini',
   geminiApiKey: process.env.GEMINI_API_KEY,
   maxFileSizeMb: 50,
+  // Extraction caps (audit F5/F6/F7). Real workbooks measured at: <=5 sheets,
+  // <=35k cells per sheet, <=5.8k merge-filled cells, <=61k chars of text.
+  // The defaults leave 10x+ headroom over that.
+  maxSheets: 50,
+  maxSheetCells: 500_000,
+  maxMergeFillCells: 100_000,
+  maxExtractedChars: parseInt(process.env.IMPORT_MAX_EXTRACTED_CHARS || '1000000'),
+  pdfMaxPages: parseInt(process.env.IMPORT_PDF_MAX_PAGES || '50'),
   allowedMimeTypes: [
     'application/pdf',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

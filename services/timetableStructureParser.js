@@ -52,8 +52,12 @@ function findPanelLabel(cells) {
   return distinct.find((v) => PANEL_PATTERN.test(v)) || null;
 }
 
-function parsePanelHeader(label) {
-  const m = label.match(/panel\s*-*\s*([A-Za-z0-9,\s-]+?)(?:\s*\(([^)]+)\))?\s*$/i);
+function parsePanelHeader(rawLabel) {
+  // Real labels are <100 chars. Truncate, and collapse whitespace runs for
+  // the match only: the pattern's adjacent \s* / [\s-]+? groups are
+  // polynomial on long space runs. panelLabel keeps the original spacing.
+  const label = rawLabel.slice(0, 200);
+  const m = label.replace(/\s+/g, ' ').match(/panel\s*-*\s*([A-Za-z0-9,\s-]+?)(?:\s*\(([^)]+)\))?\s*$/i);
   const divisionsRaw = m ? m[1] : label;
   const divisions = divisionsRaw
     .split(',')

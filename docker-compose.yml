@@ -1,0 +1,93 @@
+# Production (single EC2). Secrets live only on the host:
+#   /opt/vyas/app.env   — all app vars; REDIS_URL=redis://:<REDIS_PASSWORD>@redis:6379
+#   /opt/vyas/redis.env — REDIS_PASSWORD=<same password>
+# Background jobs (email, timetable import) run in the separate `worker` service; `app` runs
+# with RUN_WORKERS=false so a hostile import can only take down the worker, not the API.
+# Memory budget for a 2 GB t3.small (tune with `docker stats`): app 512m, worker 640m,
+# redis 320m, leaving ~500 MB for the OS / Docker / Nginx.
+# Postgres is RDS (DB_* in app.env); uploads go to S3, so no local volume.
+# Deploy: deploy/deploy.sh (TAG defaults to the checkout's git SHA; MIGRATE=1 to run migrations first).
+# Rollback: deploy/rollback.sh. The go/no-go log checks live in deploy/check.sh.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    build: .
+    image: vyas-backend:${TAG:?set TAG to the git SHA}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: ${APP_ENV_FILE:-/opt/vyas/app.env}
+    environment:
+      RUN_WORKERS: "false" # worker.js runs them
+      DB_POOL_MAX: "10" # RDS db.t3.micro has a low max_connections: app 10 + worker 5
+      NODE_OPTIONS: --max-old-space-size=384 # ~75% of mem_limit
+    mem_limit: 512m
+    pids_limit: 256
+    ports:
+      - "127.0.0.1:3000:3000" # loopback only — Nginx is the sole public entrypoint
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 15s # > app's internal 10s shutdown timeout
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging: *logging
+
+  worker:
+    # No build: here — same image as app (built once by app). Two build: sections with one image tag race
+    # in parallel builds ("image already exists").
+    image: vyas-backend:${TAG:?set TAG to the git SHA}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: ${APP_ENV_FILE:-/opt/vyas/app.env}
+    environment:
+      DB_POOL_MAX: "5"
+      NODE_OPTIONS: --max-old-space-size=448 # ~70% of mem_limit
+      # Extraction runs in a capped thread (services/extractionRunner.js); keep its caps
+      # well under mem_limit so the watchdog fires before the container is OOM-killed.
+      IMPORT_EXTRACT_HEAP_MB: "256"
+      IMPORT_EXTRACT_MEM_MB: "320"
+    command: ["node", "worker.js"]
+    # No ports: — nothing connects to the worker.
+    mem_limit: 640m
+    pids_limit: 256
+    stop_grace_period: 15s # > worker.js's internal 10s shutdown timeout
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging: *logging
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    env_file: ${REDIS_ENV_FILE:-/opt/vyas/redis.env}
+    # No ports: — reachable only as redis:6379 on the compose network.
+    command: sh -c 'exec redis-server --requirepass "$$REDIS_PASSWORD" --protected-mode yes --appendonly yes --maxmemory 200mb --maxmemory-policy noeviction'
+    mem_limit: 320m
+    pids_limit: 128
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+volumes:
+  redis-data:

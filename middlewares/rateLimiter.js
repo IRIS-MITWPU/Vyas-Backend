@@ -15,7 +15,11 @@ import IORedis from "ioredis";
 const redisClient = new IORedis(process.env.REDIS_URL, {
   maxRetriesPerRequest: 1,
   enableOfflineQueue: false,
-  commandTimeout: 500,
+  // Not lower: startup module loading blocks the event loop for >500ms on slow
+  // hosts (reproduced in Docker), which timed out RedisStore's one-shot SCRIPT
+  // LOAD and left every limiter permanently failing open. Outages still fail
+  // instantly via enableOfflineQueue: false; this only bounds a hung Redis.
+  commandTimeout: 3000,
 });
 redisClient.on("error", (err) => console.error("❌ Rate-limiter Redis error:", err));
 
@@ -32,12 +36,29 @@ await Promise.race([
   new Promise((resolve) => setTimeout(resolve, 2000)),
 ]);
 
+// The one-shot SCRIPT LOAD must not go through the fail-fast client above: a
+// blocked event loop (slow startup) fires its 3s commandTimeout before the reply
+// is read, and the rejection is cached => every limiter fails open until restart
+// (reproduced with a 5s injected block). This client has no command timeout and
+// queues until connected; the 30s race only bounds a Redis that never comes up.
+const scriptClient = new IORedis(process.env.REDIS_URL, { maxRetriesPerRequest: null });
+scriptClient.on("error", (err) => console.error("❌ Rate-limiter script-load Redis error:", err));
+
+function sendCommand(...args) {
+  if (String(args[0]).toUpperCase() !== "SCRIPT") return redisClient.call(...args);
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("rate-limiter SCRIPT LOAD timed out")), 30000);
+  });
+  return Promise.race([scriptClient.call(...args), timeout]).finally(() => clearTimeout(timer));
+}
+
 // Every limiter below pairs this store with `passOnStoreError: true` — a Redis
 // outage degrades brute-force protection temporarily rather than taking down
 // login/register entirely. Matches perEmailLimiter, which already fails open.
 function redisStore(prefix) {
   return new RedisStore({
-    sendCommand: (...args) => redisClient.call(...args),
+    sendCommand,
     prefix,
   });
 }
@@ -111,9 +132,18 @@ export const generalLimiter = rateLimit({
 // authLimiter alone is per-IP, which is trivially bypassed by rotating IPs to
 // hammer one victim email's inbox or brute-force one account's code — this
 // caps attempts against a single email address regardless of source IP.
-// Redis-backed fixed window (INCR + EXPIRE on first increment), keyed by
-// normalized email — same semantics as the old in-memory version, just
-// shared across instances instead of per-process.
+// Redis-backed fixed window keyed by normalized email — same semantics as the
+// old in-memory version, just shared across instances instead of per-process.
+// INCR and the expiry are one Lua script: with a separate PEXPIRE, a failure
+// between the two left a counter with no TTL, i.e. a permanent block for that
+// email. The script also re-arms a key that somehow has no TTL.
+const INCR_WITH_TTL = `
+local count = redis.call('INCR', KEYS[1])
+if redis.call('PTTL', KEYS[1]) < 0 then
+  redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+return count`;
+
 export function perEmailLimiter({ windowMs, max, message, keyPrefix }) {
   return async (req, res, next) => {
     const email = String(req.body?.email || "").trim().toLowerCase();
@@ -121,10 +151,7 @@ export function perEmailLimiter({ windowMs, max, message, keyPrefix }) {
 
     const key = `${keyPrefix}:${email}`;
     try {
-      const count = await redisClient.incr(key);
-      if (count === 1) {
-        await redisClient.pexpire(key, windowMs);
-      }
+      const count = await redisClient.eval(INCR_WITH_TTL, 1, key, windowMs);
       if (count > max) {
         return res.status(429).json({ error: message });
       }
@@ -141,4 +168,14 @@ export const otpEmailLimiter = perEmailLimiter({
   max: 5,
   message: "Too many requests for this email address. Please try again in an hour.",
   keyPrefix: "rl:otp-email",
+});
+
+// forgot-password, per email (audit F8): authLimiter alone is per-IP, so
+// rotating IPs could flood one inbox with reset emails. Runs for any email,
+// registered or not, so a 429 reveals nothing about account existence.
+export const resetEmailLimiter = perEmailLimiter({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 3,
+  message: "Too many password reset requests for this email address. Please try again in an hour.",
+  keyPrefix: "rl:reset-email",
 });

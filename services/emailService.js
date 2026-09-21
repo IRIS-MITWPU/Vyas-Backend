@@ -27,7 +27,7 @@ const transporter = nodemailer.createTransport({
 
 export async function sendPasswordResetEmail(to, resetUrl) {
   await transporter.sendMail({
-    from: process.env.SMTP_FROM || '"Vyas Room Booking" <nir.test09@gmail.com>',
+    from: process.env.SMTP_FROM,
     to,
     subject: "Vyas — Password Reset",
     text: [
@@ -47,7 +47,7 @@ export async function sendPasswordResetEmail(to, resetUrl) {
 
 export async function sendVerificationEmail(to, fullName, code, expiresInMinutes) {
   const info = await transporter.sendMail({
-    from: process.env.SMTP_FROM || '"Vyas Room Booking" <nir.test09@gmail.com>',
+    from: process.env.SMTP_FROM,
     to,
     subject: "Vyas — Verify your email",
     text: [
@@ -77,7 +77,7 @@ export async function sendWelcomeEmail(to, fullName) {
   const dashboardUrl = process.env.FRONTEND_ORIGIN;
 
   const info = await transporter.sendMail({
-    from: process.env.SMTP_FROM || '"Vyas Room Booking" <nir.test09@gmail.com>',
+    from: process.env.SMTP_FROM,
 
     to,
 
@@ -231,8 +231,7 @@ export async function sendBookingConfirmationEmail({
   const formattedEnd = new Date(endTime).toLocaleString();
 
   const info = await transporter.sendMail({
-    from:
-      process.env.SMTP_FROM || '"Vyas Room Booking" <noreply@mitwpu.edu.in>',
+    from: process.env.SMTP_FROM,
 
     to,
 

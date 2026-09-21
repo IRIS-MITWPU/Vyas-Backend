@@ -53,6 +53,7 @@ before(async () => {
   const authHeaders = {
     "Content-Type": "application/json",
     Cookie: authCookie,
+    Origin: BASE_URL, // cookie-authenticated writes need an allowed Origin (CSRF check)
   };
 
   const buildingRes = await fetch(`${BASE_URL}/buildings`, {
@@ -85,7 +86,7 @@ before(async () => {
 });
 
 after(async () => {
-  const authHeaders = { Cookie: authCookie };
+  const authHeaders = { Cookie: authCookie, Origin: BASE_URL };
   for (const id of bookingIds) {
     await fetch(`${BASE_URL}/booking/${id}`, { method: "DELETE", headers: authHeaders }).catch(() => {});
   }
@@ -106,7 +107,7 @@ test("two simultaneous bookings for the same room+slot — exactly one succeeds"
   const bookRoom = () =>
     fetch(`${BASE_URL}/booking`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: authCookie },
+      headers: { "Content-Type": "application/json", Cookie: authCookie, Origin: BASE_URL },
       body: payload,
     }).then(async (res) => ({ status: res.status, body: await res.json() }));
 

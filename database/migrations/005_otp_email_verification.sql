@@ -1,3 +1,9 @@
+-- !!! NEVER RE-RUN THIS FILE ON A LIVE DATABASE !!!
+-- Its backfill UPDATE marks EVERY profile as email-verified, including
+-- pending (unverified) sign-ups. Apply migrations only through
+-- `npm run db:migrate`, which records this file in schema_migrations and
+-- will not run it twice.
+--
 -- Migration 005: OTP email verification on registration (Phase 3 of
 -- IMPLEMENTATION_PLAN.md).
 -- Run: psql -d <dbname> -f database/migrations/005_otp_email_verification.sql

@@ -199,6 +199,9 @@ CREATE TABLE IF NOT EXISTS room_timetable_templates (
   id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   room_id               UUID        NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   teacher_name          TEXT        NOT NULL,
+  -- The only profile (besides admins) allowed to cancel this slot; set by an
+  -- admin. teacher_name is display text and never grants access (audit F4).
+  teacher_profile_id    UUID        REFERENCES profiles(id) ON DELETE SET NULL,
   title                 TEXT        NOT NULL,
   -- weekday: 0=Monday … 6=Sunday (matches JS Date.getDay() - 1)
   weekday               SMALLINT    NOT NULL CHECK (weekday BETWEEN 0 AND 6),
@@ -252,7 +255,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
   id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id    UUID        NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-  token      TEXT        NOT NULL UNIQUE,
+  token_hash TEXT        NOT NULL UNIQUE, -- sha256(token) hex; the plaintext only exists in the emailed link
   expires_at TIMESTAMPTZ NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -346,6 +349,13 @@ BEGIN
 
     IF NEW.end_time <= NEW.start_time THEN
         RAISE EXCEPTION 'End time must be after start time';
+    END IF;
+
+    -- A booking is one weekday slot (audit F2): without this, one row could
+    -- span months and block the room for everyone via the exclusion constraint.
+    IF (NEW.start_time AT TIME ZONE 'Asia/Kolkata')::date
+       <> (NEW.end_time AT TIME ZONE 'Asia/Kolkata')::date THEN
+        RAISE EXCEPTION 'Bookings must start and end on the same day';
     END IF;
 
     RETURN NEW;
@@ -527,25 +537,23 @@ CREATE OR REPLACE FUNCTION create_template_exception(
 )
 RETURNS UUID AS $$
 DECLARE
-    v_teacher_name TEXT;
-    v_user_name    TEXT;
-    v_exception_id UUID;
+    v_found              BOOLEAN;
+    v_teacher_profile_id UUID;
+    v_exception_id       UUID;
 BEGIN
-    SELECT teacher_name INTO v_teacher_name
+    SELECT TRUE, teacher_profile_id INTO v_found, v_teacher_profile_id
     FROM room_timetable_templates
     WHERE id = p_template_id;
 
-    IF v_teacher_name IS NULL THEN
+    IF v_found IS NULL THEN
         RAISE EXCEPTION 'Template not found';
     END IF;
 
-    SELECT full_name INTO v_user_name
-    FROM profiles
-    WHERE id = p_user_id;
-
+    -- Admin, or the profile an admin linked via teacher_profile_id. Never by
+    -- name: users can set their own full_name (audit F4, migration 010).
     IF NOT (
         EXISTS (SELECT 1 FROM profiles WHERE id = p_user_id AND is_admin = true)
-        OR LOWER(COALESCE(v_user_name, '')) = LOWER(v_teacher_name)
+        OR (v_teacher_profile_id IS NOT NULL AND v_teacher_profile_id = p_user_id)
     ) THEN
         RAISE EXCEPTION 'Permission denied: Only admins or the template teacher can create exceptions';
     END IF;
@@ -677,7 +685,7 @@ CREATE INDEX IF NOT EXISTS idx_booking_invitees_invitee_id
 
 -- password_reset_tokens
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token
-    ON password_reset_tokens (token);
+    ON password_reset_tokens (token_hash);
 
 -- room_timetable_templates
 CREATE INDEX IF NOT EXISTS idx_room_timetable_templates_room_weekday

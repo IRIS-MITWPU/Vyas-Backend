@@ -69,7 +69,7 @@ async function main() {
   );
 
   console.log("--- wrong code once [authLimiter hit 2/5] (expect INVALID_CODE, attempts -> 1) ---");
-  const wrong = await post("/user/verify-email", { email, code: "000000" });
+  const wrong = await post("/user/verify-email", { email, code: "000000", password });
   console.log(wrong.status, wrong.body);
   check("wrong code rejected with INVALID_CODE", wrong.status === 400 && wrong.body.code === "INVALID_CODE", wrong.body);
   const attemptsRow = await pool.query(
@@ -80,7 +80,7 @@ async function main() {
 
   console.log("--- simulate 5 exhausted attempts directly in DB, then try the CORRECT code [authLimiter hit 3/5] (expect still rejected: burned) ---");
   await pool.query("UPDATE email_verification_codes SET attempts = 5 WHERE user_id = $1 AND consumed_at IS NULL", [userId]);
-  const afterBurn = await post("/user/verify-email", { email, code: KNOWN_CODE });
+  const afterBurn = await post("/user/verify-email", { email, code: KNOWN_CODE, password });
   console.log(afterBurn.status, afterBurn.body);
   check("burned code (5 attempts) rejects even the correct code", afterBurn.status === 400 && afterBurn.body.code === "CODE_EXPIRED", afterBurn.body);
 
@@ -90,7 +90,7 @@ async function main() {
     `INSERT INTO email_verification_codes (user_id, code_hash, expires_at) VALUES ($1, $2, NOW() - INTERVAL '1 minute')`,
     [userId, knownHash]
   );
-  const expiredTry = await post("/user/verify-email", { email, code: KNOWN_CODE });
+  const expiredTry = await post("/user/verify-email", { email, code: KNOWN_CODE, password });
   console.log(expiredTry.status, expiredTry.body);
   check("expired code rejected with CODE_EXPIRED", expiredTry.status === 400 && expiredTry.body.code === "CODE_EXPIRED", expiredTry.body);
 
@@ -101,7 +101,7 @@ async function main() {
     `INSERT INTO email_verification_codes (user_id, code_hash, expires_at) VALUES ($1, $2, $3)`,
     [userId, knownHash, expiresAt]
   );
-  const verifyOk = await post("/user/verify-email", { email, code: KNOWN_CODE });
+  const verifyOk = await post("/user/verify-email", { email, code: KNOWN_CODE, password });
   console.log(verifyOk.status, verifyOk.body.message, "token present:", !!verifyOk.body.token);
   check("correct code verifies and issues a token", verifyOk.status === 200 && !!verifyOk.body.token, verifyOk.body);
 

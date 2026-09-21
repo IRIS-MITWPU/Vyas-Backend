@@ -8,13 +8,19 @@
     "dev": "nodemon app.js",
     "seed": "node database/seed.js",
     "db:schema": "psql $DATABASE_URL -f database/schema.sql",
-    "email:worker": "node workers/emailWorker.js",
-    "test": "node --test tests/auth.test.js tests/concurrency.test.js tests/security.test.js"
+    "db:migrate": "node scripts/migrate.mjs",
+    "test": "node --test tests/auth.test.js tests/concurrency.test.js tests/security.test.js tests/remediation.test.js tests/import-hardening.test.js tests/create-admin.test.js tests/deploy-scripts.test.js",
+    "test:reset": "node scripts/flush-rate-limits.mjs",
+    "create-admin": "node scripts/create-admin.mjs",
+    "test:nginx": "node --test tests/nginx-conf.test.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
+  "engines": {
+    "node": "22.18.0"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1116.0",
     "@bull-board/api": "^7.0.0",
@@ -47,7 +53,7 @@
     "string-similarity": "^4.0.4",
     "tesseract.js": "^7.0.0",
     "uuid": "^13.0.0",
-    "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.3.6"
   }
 }

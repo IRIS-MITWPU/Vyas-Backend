@@ -98,7 +98,7 @@ test("POST /user/logout-all revokes cookies issued before it", async () => {
   const revoker = await login();
   res = await fetch(`${BASE_URL}/user/logout-all`, {
     method: "POST",
-    headers: { Cookie: revoker },
+    headers: { Cookie: revoker, Origin: BASE_URL },
   });
   assert.equal(res.status, 200);
 
@@ -193,7 +193,7 @@ test("DELETE /jobs/:jobId/lectures/:lectureId won't reject a lecture from anothe
   // Mismatched pair: lecture belongs to jobB, request is scoped to jobA.
   const res = await fetch(`${BASE_URL}/timetable-import/jobs/${jobA}/lectures/${lecture}`, {
     method: "DELETE",
-    headers: { Cookie: authCookie },
+    headers: { Cookie: authCookie, Origin: BASE_URL },
   });
   assert.equal(res.status, 404);
 
@@ -218,7 +218,7 @@ test("PATCH /jobs/:jobId/conflicts/:conflictId/resolve won't resolve another job
 
   const res = await fetch(
     `${BASE_URL}/timetable-import/jobs/${jobA}/conflicts/${conflict}/resolve`,
-    { method: "PATCH", headers: { Cookie: authCookie } }
+    { method: "PATCH", headers: { Cookie: authCookie, Origin: BASE_URL } }
   );
   assert.equal(res.status, 404);
 

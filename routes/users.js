@@ -8,9 +8,10 @@ import {
   verifyEmail,
   resendVerification,
   cookieOptions,
+  fullNameSchema,
 } from "../controllers/userController.js";
 import { protect, adminOnly } from "../middlewares/authMiddleware.js";
-import { loginLimiter, authLimiter, otpVerifyLimiter, otpEmailLimiter } from "../middlewares/rateLimiter.js";
+import { loginLimiter, authLimiter, otpVerifyLimiter, otpEmailLimiter, resetEmailLimiter } from "../middlewares/rateLimiter.js";
 import pool from "../database/db.js";
 import { logAuditEvent } from "../services/auditLog.js";
 
@@ -18,7 +19,7 @@ const router = express.Router();
 
 router.post("/register", authLimiter, otpEmailLimiter, register);
 router.post("/login", loginLimiter, login);
-router.post("/forgot-password", authLimiter, forgotPassword);
+router.post("/forgot-password", authLimiter, resetEmailLimiter, forgotPassword);
 router.post("/reset-password", authLimiter, resetPassword);
 router.post("/verify-email", otpVerifyLimiter, otpEmailLimiter, verifyEmail);
 router.post("/resend-verification", otpVerifyLimiter, otpEmailLimiter, resendVerification);
@@ -48,17 +49,22 @@ router.get("/me", protect, async (req, res) => {
 router.patch("/me", protect, async (req, res) => {
   const { full_name, department } = req.body;
 
-  if (full_name !== undefined && !full_name.trim()) {
-    return res.status(400).json({ success: false, error: "full_name cannot be empty" });
+  let fullName;
+  if (full_name !== undefined) {
+    const parsed = fullNameSchema.safeParse(full_name);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: parsed.error.issues[0].message });
+    }
+    fullName = parsed.data;
   }
 
   const fields = [];
   const values = [];
   let i = 1;
 
-  if (full_name !== undefined) {
+  if (fullName !== undefined) {
     fields.push(`full_name = $${i++}`);
-    values.push(full_name.trim());
+    values.push(fullName);
   }
   if (department !== undefined) {
     fields.push(`department = $${i++}`);

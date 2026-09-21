@@ -21,6 +21,9 @@ const ALLOWED_STATUS_TRANSITIONS = {
   cancelled: ["cancelled"],
 };
 
+// The booking window is 07:30–22:30 IST, so no valid booking is longer than 15 h.
+const MAX_BOOKING_MS = 15 * 60 * 60 * 1000;
+
 const createBookingSchema = z
   .object({
     roomId: z.string().uuid("roomId must be a valid UUID"),
@@ -35,6 +38,12 @@ const createBookingSchema = z
   })
   .refine((d) => new Date(d.endTime) > new Date(d.startTime), {
     message: "endTime must be after startTime",
+    path: ["endTime"],
+  })
+  // Friendly 400 for the obvious cases; the validate_booking_times trigger is
+  // the real guard (same IST day) for every write path.
+  .refine((d) => new Date(d.endTime) - new Date(d.startTime) <= MAX_BOOKING_MS, {
+    message: "Booking cannot exceed one day",
     path: ["endTime"],
   });
 
@@ -51,6 +60,10 @@ const updateBookingSchema = z
   })
   .refine((d) => !(d.start_time && d.end_time) || new Date(d.end_time) > new Date(d.start_time), {
     message: "end_time must be after start_time",
+    path: ["end_time"],
+  })
+  .refine((d) => !(d.start_time && d.end_time) || new Date(d.end_time) - new Date(d.start_time) <= MAX_BOOKING_MS, {
+    message: "Booking cannot exceed one day",
     path: ["end_time"],
   });
 
@@ -548,15 +561,16 @@ router.patch("/:id", protect, async (req, res) => {
     return res.status(403).json({ error: "Only admins can change booking status" });
   }
 
+  let checkedStatus;
   if (status !== undefined) {
     const currentRes = await pool.query("SELECT status FROM bookings WHERE id = $1", [bookingId]);
     if (currentRes.rows.length === 0) {
       return res.status(404).json({ error: "Booking not found" });
     }
-    const currentStatus = currentRes.rows[0].status;
-    if (!ALLOWED_STATUS_TRANSITIONS[currentStatus]?.includes(status)) {
+    checkedStatus = currentRes.rows[0].status;
+    if (!ALLOWED_STATUS_TRANSITIONS[checkedStatus]?.includes(status)) {
       return res.status(409).json({
-        error: `Cannot change booking status from "${currentStatus}" to "${status}"`,
+        error: `Cannot change booking status from "${checkedStatus}" to "${status}"`,
       });
     }
   }
@@ -567,8 +581,23 @@ router.patch("/:id", protect, async (req, res) => {
 
   if (title !== undefined) { fields.push(`title = $${i++}`); values.push(title); }
   if (description !== undefined) { fields.push(`description = $${i++}`); values.push(description || null); }
-  if (start_time !== undefined) { fields.push(`start_time = $${i++}`); values.push(start_time); }
-  if (end_time !== undefined) { fields.push(`end_time = $${i++}`); values.push(end_time); }
+  let startExpr = "start_time";
+  let endExpr = "end_time";
+  if (start_time !== undefined) { startExpr = `$${i}::timestamptz`; fields.push(`start_time = $${i++}`); values.push(start_time); }
+  if (end_time !== undefined) { endExpr = `$${i}::timestamptz`; fields.push(`end_time = $${i++}`); values.push(end_time); }
+
+  // Audit F3: an admin approved *this* slot. If the owner moves a confirmed
+  // booking in a requires_approval room, it needs approval again. Decided in
+  // the same UPDATE (SET expressions see the pre-update row), so there's no
+  // window between checking and writing.
+  if (!isAdmin && (start_time !== undefined || end_time !== undefined)) {
+    const needsReapproval = `(status = 'confirmed'
+      AND (SELECT requires_approval FROM rooms WHERE id = bookings.room_id)
+      AND (start_time IS DISTINCT FROM ${startExpr} OR end_time IS DISTINCT FROM ${endExpr}))`;
+    fields.push(`status = CASE WHEN ${needsReapproval} THEN 'pending'::booking_status ELSE status END`);
+    fields.push(`approved_by = CASE WHEN ${needsReapproval} THEN NULL ELSE approved_by END`);
+    fields.push(`approved_at = CASE WHEN ${needsReapproval} THEN NULL ELSE approved_at END`);
+  }
   if (class_division !== undefined) { fields.push(`class_division = $${i++}`); values.push(class_division || null); }
   if (panel !== undefined) { fields.push(`panel = $${i++}`); values.push(panel || null); }
   if (year_course !== undefined) { fields.push(`year_course = $${i++}`); values.push(year_course || null); }
@@ -593,13 +622,28 @@ router.patch("/:id", protect, async (req, res) => {
     query += ` AND teacher_id = $${i + 1}`;
     values.push(userId);
   }
+  // The transition was validated against `checkedStatus`; only apply it if the
+  // row still has that status. A concurrent owner cancel (DELETE locks the row)
+  // makes this match 0 rows → 409 instead of silently resurrecting it.
+  if (checkedStatus !== undefined) {
+    query += ` AND status = $${values.length + 1}`;
+    values.push(checkedStatus);
+  }
   query += " RETURNING *";
 
   try {
     const result = await pool.query(query, values);
     if (result.rows.length === 0) {
+      if (checkedStatus !== undefined) {
+        return res.status(409).json({ error: "Booking was changed concurrently; reload and try again" });
+      }
       return res.status(404).json({ error: "Booking not found or access denied" });
     }
+    const updated = result.rows[0];
+    req.app.get("io")?.to(`room:${updated.room_id}`).emit("room:booked", {
+      roomId: updated.room_id,
+      booking: updated,
+    });
     if (status !== undefined) {
       logAuditEvent({
         actorUserId: userId,

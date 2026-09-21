@@ -8,7 +8,13 @@
 import crypto from "crypto";
 
 const ALGORITHM = "aes-256-gcm";
-const KEY = crypto.createHash("sha256").update(process.env.JWT_SECRET).digest();
+// Derived with HKDF under its own label so this key is cryptographically
+// separate from the JWT signing use of the same secret (was sha256(secret)).
+// Still tied to JWT_SECRET: rotating it makes queued OTP emails undecryptable
+// (users just press "resend").
+const KEY = Buffer.from(
+  crypto.hkdfSync("sha256", process.env.JWT_SECRET, "vyas", "otp-email-encryption-v1", 32)
+);
 
 export function encryptOtp(code) {
   const iv = crypto.randomBytes(12);
