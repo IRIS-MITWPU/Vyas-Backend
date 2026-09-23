@@ -6,6 +6,8 @@ TimeTable/
 # Claude Code context — local only, do not commit
 CLAUDE.md
 CLAUDE_CODE_INSTRUCTIONS_BACKEND.md 
+REMEDIATION-LOG.md
+docker-stuff-summary.md
 
 #MD Files
 BEFORE_DEP.md

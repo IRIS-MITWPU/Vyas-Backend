@@ -846,13 +846,19 @@ router.delete("/room/:id", protect, adminOnly, async (req, res) => {
   const client = await pool.connect();
 
   try {
-    // Check if room exists
+    await client.query("BEGIN");
+
+    // Lock the room row so a concurrent POST /booking (which takes an
+    // implicit FOR KEY SHARE lock on this row via the FK) blocks until
+    // this transaction resolves — closes the TOCTOU gap between the
+    // bookings check below and the DELETE.
     const roomRes = await client.query(
-      "SELECT * FROM rooms WHERE id = $1",
+      "SELECT * FROM rooms WHERE id = $1 FOR UPDATE",
       [id],
     );
 
     if (roomRes.rows.length === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({
         success: false,
         error: "Room not found",
@@ -869,6 +875,7 @@ router.delete("/room/:id", protect, adminOnly, async (req, res) => {
     );
 
     if (bookingsRes.rows.length > 0) {
+      await client.query("ROLLBACK");
       return res.status(400).json({
         success: false,
         error: "Cannot delete room because it has active bookings",
@@ -881,11 +888,14 @@ router.delete("/room/:id", protect, adminOnly, async (req, res) => {
       [id],
     );
 
+    await client.query("COMMIT");
+
     return res.json({
       success: true,
       message: "Room deleted successfully",
     });
   } catch (error) {
+    await client.query("ROLLBACK");
     console.error("Error deleting room:", error);
 
     return res.status(500).json({

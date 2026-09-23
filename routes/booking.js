@@ -341,7 +341,7 @@ router.get("/admin/all", protect, adminOnly, async (req, res) => {
     }
     
     const countQuery = query.replace(
-      /SELECT.*FROM/,
+      /SELECT.*FROM/s,
       'SELECT COUNT(*) as total FROM'
     );
     const countResult = await pool.query(countQuery, params);
