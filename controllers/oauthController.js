@@ -17,6 +17,7 @@ export function googleCallback(req, res) {
 const ERROR_QUERY_PARAMS = {
   DOMAIN_NOT_ALLOWED: "domain_not_allowed",
   UNVERIFIED_ACCOUNT_EXISTS: "unverified_account_exists",
+  NOT_ALLOWED: "not_allowed",
   OAUTH_FAILED: "oauth_failed",
 };
 

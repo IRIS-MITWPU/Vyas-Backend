@@ -86,6 +86,18 @@ CREATE TABLE IF NOT EXISTS oauth_identities (
 CREATE INDEX IF NOT EXISTS idx_oauth_identities_user_id ON oauth_identities(user_id);
 
 -- ============================================================
+-- ALLOWED USER  (staff allowlist for new account creation — migration 013)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS allowed_user (
+  email      TEXT        PRIMARY KEY CHECK (email = lower(email)),
+  full_name  TEXT        NOT NULL,
+  eprn       TEXT        UNIQUE,  -- NULL for non-teaching staff
+  phone      TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
 -- BUILDINGS
 -- ============================================================
 

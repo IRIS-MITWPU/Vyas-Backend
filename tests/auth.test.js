@@ -27,10 +27,13 @@ after(async () => {
   if (createdUserId) {
     await pool.query("DELETE FROM profiles WHERE id = $1", [createdUserId]);
   }
+  await pool.query("DELETE FROM allowed_user WHERE email = $1", [testEmail]);
   await pool.end();
 });
 
 test("POST /user/register — happy path creates an unverified user, no session", async () => {
+  // Registration is gated by the staff allowlist.
+  await pool.query("INSERT INTO allowed_user (email, full_name) VALUES ($1, 'Test User')", [testEmail]);
   const res = await fetch(`${BASE_URL}/user/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

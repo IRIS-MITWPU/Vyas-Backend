@@ -9,6 +9,7 @@ import { enqueueEmail } from "../services/emailQueue.js";
 import { sendError } from "../utils/errorResponse.js";
 import { encryptOtp } from "../utils/otpCrypto.js";
 import { isAllowedDomain } from "../utils/emailDomain.js";
+import { isAllowedUser } from "../utils/allowedUser.js";
 import { logAuditEvent } from "../services/auditLog.js";
 
 // ============================================================
@@ -143,6 +144,14 @@ export async function register(req, res) {
   }
 
   try {
+    // Staff allowlist — after the (DB-free) domain check, before any bcrypt/write work.
+    if (!(await isAllowedUser(email))) {
+      return res.status(403).json({
+        success: false,
+        message: "This email is not authorized to register. Contact the administrator.",
+      });
+    }
+
     const user = await registerUser(full_name, email, password);
     await issueVerificationCode(user.id, email, full_name);
     res.status(201).json({ requiresVerification: true, email });

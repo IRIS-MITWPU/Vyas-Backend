@@ -21,12 +21,14 @@ import { encryptOtp, decryptOtp } from "../utils/otpCrypto.js";
 import { createHash, createDecipheriv } from "node:crypto";
 import IORedis from "ioredis";
 import { emailQueue } from "../services/emailQueue.js";
+import { findOrCreateGoogleUser, NotAllowedUserError } from "../models/oauthModel.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const ADMIN_EMAIL = "admin@mitwpu.edu.in";
 
 let adminId;
 const createdEmails = []; // profiles to delete after the run (cascades to auth/OTP/tokens)
+const allowedEmails = []; // allowed_user rows this run inserted
 
 before(async () => {
   adminId = (await pool.query("SELECT id FROM profiles WHERE email = $1", [ADMIN_EMAIL])).rows[0].id;
@@ -35,6 +37,9 @@ before(async () => {
 after(async () => {
   if (createdEmails.length) {
     await pool.query("DELETE FROM profiles WHERE email = ANY($1)", [createdEmails]);
+  }
+  if (allowedEmails.length) {
+    await pool.query("DELETE FROM allowed_user WHERE email = ANY($1)", [allowedEmails]);
   }
   await pool.end();
   const client = await emailQueue.client;
@@ -96,6 +101,17 @@ async function call(handler, body) {
 
 const uniq = (tag) => `rem-${tag}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@mitwpu.edu.in`;
 
+// Registration is gated by the staff allowlist, so throwaway emails must be on it.
+// Only rows this run actually inserted are cleaned up.
+async function allow(email) {
+  const { rowCount } = await pool.query(
+    "INSERT INTO allowed_user (email, full_name) VALUES ($1, 'Test') ON CONFLICT DO NOTHING",
+    [email]
+  );
+  if (rowCount) allowedEmails.push(email);
+  return email;
+}
+
 // Replace the hash of the user's current OTP with a known code — the real
 // code only exists encrypted inside the queued email job.
 async function setOtp(email, code) {
@@ -118,7 +134,7 @@ const profileOf = async (email) =>
 // ============================================================
 
 test("2.1 F0: verifying with the OTP alone, or with a password that isn't the account's, fails", async () => {
-  const email = uniq("f0a");
+  const email = await allow(uniq("f0a"));
   createdEmails.push(email);
   let r = await call(register, { full_name: "Attacker", email, password: "AttackerPass1!" });
   assert.equal(r.status, 201);
@@ -141,7 +157,7 @@ test("2.1 F0: verifying with the OTP alone, or with a password that isn't the ac
 });
 
 test("2.1 F0: re-registering a pending email replaces the credential and kills old OTPs", async () => {
-  const email = uniq("f0c");
+  const email = await allow(uniq("f0c"));
   createdEmails.push(email);
   assert.equal((await call(register, { full_name: "Attacker", email, password: "AttackerPass1!" })).status, 201);
   const attackerOtpId = await setOtp(email, "111111");
@@ -166,6 +182,7 @@ test("2.1 F0: re-registering a pending email replaces the credential and kills o
 });
 
 test("2.1 F0: re-registering a verified email still fails and changes nothing", async () => {
+  await allow(ADMIN_EMAIL); // get past the allowlist so the verified-email path is what's exercised
   const before = (await pool.query(
     "SELECT a.password_hash, p.full_name FROM profiles p JOIN user_auth a ON a.user_id = p.id WHERE p.email = $1",
     [ADMIN_EMAIL]
@@ -181,7 +198,7 @@ test("2.1 F0: re-registering a verified email still fails and changes nothing", 
 });
 
 test("2.1: 20 concurrent wrong OTP guesses — at most 5 are ever evaluated", async () => {
-  const email = uniq("otp-race");
+  const email = await allow(uniq("otp-race"));
   createdEmails.push(email);
   assert.equal((await call(register, { full_name: "Racer", email, password: "RacerPass1!" })).status, 201);
   await setOtp(email, "999999");
@@ -198,6 +215,57 @@ test("2.1: 20 concurrent wrong OTP guesses — at most 5 are ever evaluated", as
      WHERE p.email = $1 AND c.consumed_at IS NULL`, [email]
   );
   assert.ok(otp.attempts <= 5, `attempts column overshot: ${otp.attempts}`);
+});
+
+// ============================================================
+// Staff allowlist (allowed_user) — gates NEW accounts only
+// ============================================================
+
+test("allowlist: a @mitwpu.edu.in email not on the list can't register, and no profile is created", async () => {
+  const email = uniq("not-allowed");
+  const r = await call(register, { full_name: "Outsider", email, password: "GoodPass123!" });
+  assert.equal(r.status, 403);
+  assert.match(r.body.message, /not authorized to register/);
+  assert.equal(await profileOf(email), undefined);
+});
+
+test("allowlist: an allowlisted email registers (case-insensitive match)", async () => {
+  const email = await allow(uniq("allowed"));
+  const r = await call(register, { full_name: "Insider", email: email.toUpperCase(), password: "GoodPass123!" });
+  assert.equal(r.status, 201);
+  createdEmails.push(email.toUpperCase()); // register stores the email as typed
+});
+
+test("allowlist: the domain check still runs first", async () => {
+  const r = await call(register, { full_name: "Outsider", email: "someone@gmail.com", password: "GoodPass123!" });
+  assert.equal(r.status, 403);
+  assert.match(r.body.message, /restricted to @mitwpu\.edu\.in/);
+});
+
+test("allowlist: an existing account not on the list can still log in", async () => {
+  const u = await makeVerifiedUser("Existing Unlisted");
+  const r = await call(login, { email: u.email, password: "UserPass123!" });
+  assert.equal(r.status, 200);
+});
+
+test("allowlist: Google sign-in creates only allowlisted accounts, but links existing ones regardless", async () => {
+  const gid = () => `test-google-${Date.now()}-${Math.random()}`;
+
+  const outsider = uniq("g-not-allowed");
+  await assert.rejects(
+    () => findOrCreateGoogleUser({ googleId: gid(), email: outsider, fullName: "Outsider" }),
+    NotAllowedUserError
+  );
+  assert.equal(await profileOf(outsider), undefined);
+
+  const insider = await allow(uniq("g-allowed"));
+  createdEmails.push(insider);
+  const created = await findOrCreateGoogleUser({ googleId: gid(), email: insider, fullName: "Insider" });
+  assert.equal(created.email, insider);
+
+  const u = await makeVerifiedUser("Existing Unlisted");
+  const linked = await findOrCreateGoogleUser({ googleId: gid(), email: u.email, fullName: "Whatever" });
+  assert.equal(linked.id, u.id);
 });
 
 // ============================================================
@@ -345,7 +413,7 @@ test("2.4: full_name is trimmed, 1–100 chars, no control characters", async ()
 
   r = await call(register, { full_name: "Evil\u0007Bell", email: uniq("f24"), password: "GoodPass123!" });
   assert.equal(r.status, 400);
-  const email = uniq("f24ok");
+  const email = await allow(uniq("f24ok"));
   createdEmails.push(email);
   r = await call(register, { full_name: "  Padded Name ", email, password: "GoodPass123!" });
   assert.equal(r.status, 201);

@@ -1,5 +1,6 @@
 // models/oauthModel.js
 import pool from "../database/db.js";
+import { isAllowedUser } from "../utils/allowedUser.js";
 
 const PROVIDER = "google";
 
@@ -9,6 +10,14 @@ export class UnverifiedAccountExistsError extends Error {
       "An account with this email already exists but hasn't completed email verification."
     );
     this.name = "UnverifiedAccountExistsError";
+    this.email = email;
+  }
+}
+
+export class NotAllowedUserError extends Error {
+  constructor(email) {
+    super("This email is not on the staff allowlist.");
+    this.name = "NotAllowedUserError";
     this.email = email;
   }
 }
@@ -59,6 +68,12 @@ export async function findOrCreateGoogleUser({ googleId, email, fullName }) {
         [profile.id, PROVIDER, googleId]
       );
     } else {
+      // Only NEW accounts are gated by the staff allowlist; an existing
+      // verified profile (branch above) links regardless.
+      if (!(await isAllowedUser(email, client))) {
+        throw new NotAllowedUserError(email);
+      }
+
       const inserted = await client.query(
         `INSERT INTO profiles (full_name, email, email_verified)
          VALUES ($1, $2, TRUE)

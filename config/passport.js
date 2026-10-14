@@ -3,7 +3,11 @@ import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { OAuth2Client } from "google-auth-library";
 import { isAllowedDomain } from "../utils/emailDomain.js";
-import { findOrCreateGoogleUser, UnverifiedAccountExistsError } from "../models/oauthModel.js";
+import {
+  findOrCreateGoogleUser,
+  UnverifiedAccountExistsError,
+  NotAllowedUserError,
+} from "../models/oauthModel.js";
 import { CookieStateStore } from "./oauthStateStore.js";
 
 // Used only to cryptographically verify the ID token's signature/claims —
@@ -59,6 +63,9 @@ passport.use(
       } catch (err) {
         if (err instanceof UnverifiedAccountExistsError) {
           return done(null, false, { message: "UNVERIFIED_ACCOUNT_EXISTS" });
+        }
+        if (err instanceof NotAllowedUserError) {
+          return done(null, false, { message: "NOT_ALLOWED" });
         }
         return done(err);
       }

@@ -12,6 +12,7 @@
     "test": "node --test tests/auth.test.js tests/concurrency.test.js tests/security.test.js tests/remediation.test.js tests/import-hardening.test.js tests/create-admin.test.js tests/deploy-scripts.test.js",
     "test:reset": "node scripts/flush-rate-limits.mjs",
     "create-admin": "node scripts/create-admin.mjs",
+    "import-allowed-users": "node scripts/import-allowed-users.mjs",
     "test:nginx": "node --test tests/nginx-conf.test.js"
   },
   "keywords": [],
