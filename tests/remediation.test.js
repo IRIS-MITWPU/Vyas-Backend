@@ -6,22 +6,19 @@
 //   npm run dev                          # terminal 1
 //   npm run test:reset && npm test       # terminal 2
 //
-// Requires the seeded admin account (admin@mitwpu.edu.in / Admin@1234).
+// Requires the seeded admin profile (admin@mitwpu.edu.in); sessions are minted
+// directly (tests/helpers/auth.js) — there is no password to log in with.
 // Each test cleans up what it creates.
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import jwt from "jsonwebtoken";
 import { spawn, spawnSync } from "node:child_process";
 import pool from "../database/db.js";
-import bcrypt from "bcryptjs";
-import { verifySessionToken } from "../middlewares/authMiddleware.js";
-import { register, login, verifyEmail, forgotPassword, resetPassword, generateToken } from "../controllers/userController.js";
-import { encryptOtp, decryptOtp } from "../utils/otpCrypto.js";
+import { encryptOtp, decryptOtp, hashCode } from "../utils/otpCrypto.js";
 import { createHash, createDecipheriv } from "node:crypto";
 import IORedis from "ioredis";
-import { emailQueue } from "../services/emailQueue.js";
 import { findOrCreateGoogleUser, NotAllowedUserError } from "../models/oauthModel.js";
+import { sessionFor } from "./helpers/auth.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const ADMIN_EMAIL = "admin@mitwpu.edu.in";
@@ -42,28 +39,6 @@ after(async () => {
     await pool.query("DELETE FROM allowed_user WHERE email = ANY($1)", [allowedEmails]);
   }
   await pool.end();
-  const client = await emailQueue.client;
-  await emailQueue.close();
-  await client.quit();
-});
-
-// ============================================================
-// 1.2 — JWT algorithm pinning
-// ============================================================
-
-test("1.2: a session token signed with a non-HS256 algorithm is rejected", async () => {
-  const { token_version } = (
-    await pool.query("SELECT token_version FROM profiles WHERE id = $1", [adminId])
-  ).rows[0];
-
-  const hs384 = jwt.sign({ id: adminId, token_version }, process.env.JWT_SECRET, {
-    algorithm: "HS384",
-    expiresIn: 600,
-  });
-  await assert.rejects(() => verifySessionToken(hs384), /invalid algorithm/);
-
-  const res = await fetch(`${BASE_URL}/user/me`, { headers: { Cookie: `token=${hs384}` } });
-  assert.equal(res.status, 401);
 });
 
 // ============================================================
@@ -82,26 +57,12 @@ test("1.5: the app refuses to start without SMTP_FROM", () => {
 });
 
 // ============================================================
-// Controller-level harness. register/forgot/reset share a 5/hour per-IP
-// bucket and the OTP routes a 5/hour per-email one, so tests that aren't
-// about the limiters call the controllers directly (same approach the
-// security suite uses for `protect`).
+// Helpers
 // ============================================================
-
-async function call(handler, body) {
-  const out = { status: 200, body: undefined, cookies: {} };
-  const res = {
-    status(code) { out.status = code; return res; },
-    json(b) { out.body = b; return res; },
-    cookie(name, value) { out.cookies[name] = value; return res; },
-  };
-  await handler({ body }, res);
-  return out;
-}
 
 const uniq = (tag) => `rem-${tag}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@mitwpu.edu.in`;
 
-// Registration is gated by the staff allowlist, so throwaway emails must be on it.
+// New accounts are gated by the staff allowlist, so throwaway emails must be on it.
 // Only rows this run actually inserted are cleaned up.
 async function allow(email) {
   const { rowCount } = await pool.query(
@@ -112,141 +73,12 @@ async function allow(email) {
   return email;
 }
 
-// Replace the hash of the user's current OTP with a known code — the real
-// code only exists encrypted inside the queued email job.
-async function setOtp(email, code) {
-  const { rows } = await pool.query(
-    `UPDATE email_verification_codes SET code_hash = $2
-     WHERE id = (SELECT c.id FROM email_verification_codes c JOIN profiles p ON p.id = c.user_id
-                 WHERE p.email = $1 AND c.consumed_at IS NULL ORDER BY c.created_at DESC LIMIT 1)
-     RETURNING id`,
-    [email, await bcrypt.hash(code, 4)]
-  );
-  assert.equal(rows.length, 1, `no pending OTP row for ${email}`);
-  return rows[0].id;
-}
-
 const profileOf = async (email) =>
   (await pool.query("SELECT * FROM profiles WHERE email = $1", [email])).rows[0];
 
 // ============================================================
-// 2.1 [F0] — account pre-hijacking
-// ============================================================
-
-test("2.1 F0: verifying with the OTP alone, or with a password that isn't the account's, fails", async () => {
-  const email = await allow(uniq("f0a"));
-  createdEmails.push(email);
-  let r = await call(register, { full_name: "Attacker", email, password: "AttackerPass1!" });
-  assert.equal(r.status, 201);
-  await setOtp(email, "123456");
-
-  // The mailbox owner has the code but not the attacker's password.
-  r = await call(verifyEmail, { email, code: "123456" });
-  assert.equal(r.status, 400);
-  r = await call(verifyEmail, { email, code: "123456", password: "VictimPass1!" });
-  assert.equal(r.status, 400);
-  assert.equal(r.body.code, "INVALID_CODE", "wrong password must look exactly like a wrong code");
-  assert.equal(r.cookies.token, undefined);
-
-  const p = await profileOf(email);
-  assert.equal(p.email_verified, false);
-  const { rows: [otp] } = await pool.query(
-    "SELECT attempts FROM email_verification_codes WHERE user_id = $1 AND consumed_at IS NULL", [p.id]
-  );
-  assert.equal(otp.attempts, 1, "a wrong-password verify counts as a failed attempt");
-});
-
-test("2.1 F0: re-registering a pending email replaces the credential and kills old OTPs", async () => {
-  const email = await allow(uniq("f0c"));
-  createdEmails.push(email);
-  assert.equal((await call(register, { full_name: "Attacker", email, password: "AttackerPass1!" })).status, 201);
-  const attackerOtpId = await setOtp(email, "111111");
-  const versionBefore = (await profileOf(email)).token_version;
-
-  const r = await call(register, { full_name: "Real Owner", email, password: "OwnerPass1!" });
-  assert.equal(r.status, 201, "a pending (unverified) registration must be replaceable");
-
-  const { rowCount } = await pool.query("SELECT 1 FROM email_verification_codes WHERE id = $1", [attackerOtpId]);
-  assert.equal(rowCount, 0, "the attacker-era OTP must be gone");
-  assert.equal((await call(login, { email, password: "AttackerPass1!" })).status, 401);
-
-  await setOtp(email, "222222");
-  const v = await call(verifyEmail, { email, code: "222222", password: "OwnerPass1!" });
-  assert.equal(v.status, 200);
-  assert.ok(v.cookies.token);
-  const p = await profileOf(email);
-  assert.equal(p.email_verified, true);
-  assert.equal(p.full_name, "Real Owner");
-  assert.ok(p.token_version > versionBefore, "verify must bump token_version");
-  assert.equal((await call(login, { email, password: "OwnerPass1!" })).status, 200);
-});
-
-test("2.1 F0: re-registering a verified email still fails and changes nothing", async () => {
-  await allow(ADMIN_EMAIL); // get past the allowlist so the verified-email path is what's exercised
-  const before = (await pool.query(
-    "SELECT a.password_hash, p.full_name FROM profiles p JOIN user_auth a ON a.user_id = p.id WHERE p.email = $1",
-    [ADMIN_EMAIL]
-  )).rows[0];
-  const r = await call(register, { full_name: "Hijacker", email: ADMIN_EMAIL, password: "Whatever123!" });
-  assert.equal(r.status, 400);
-  assert.match(r.body.message, /Registration failed/);
-  const afterRow = (await pool.query(
-    "SELECT a.password_hash, p.full_name FROM profiles p JOIN user_auth a ON a.user_id = p.id WHERE p.email = $1",
-    [ADMIN_EMAIL]
-  )).rows[0];
-  assert.deepEqual(afterRow, before);
-});
-
-test("2.1: 20 concurrent wrong OTP guesses — at most 5 are ever evaluated", async () => {
-  const email = await allow(uniq("otp-race"));
-  createdEmails.push(email);
-  assert.equal((await call(register, { full_name: "Racer", email, password: "RacerPass1!" })).status, 201);
-  await setOtp(email, "999999");
-
-  const results = await Promise.all(
-    Array.from({ length: 20 }, (_, i) =>
-      call(verifyEmail, { email, code: String(100000 + i), password: "RacerPass1!" })
-    )
-  );
-  const evaluated = results.filter((r) => r.body?.code === "INVALID_CODE").length;
-  assert.ok(evaluated <= 5, `expected <= 5 evaluated guesses, got ${evaluated}`);
-  const { rows: [otp] } = await pool.query(
-    `SELECT c.attempts FROM email_verification_codes c JOIN profiles p ON p.id = c.user_id
-     WHERE p.email = $1 AND c.consumed_at IS NULL`, [email]
-  );
-  assert.ok(otp.attempts <= 5, `attempts column overshot: ${otp.attempts}`);
-});
-
-// ============================================================
 // Staff allowlist (allowed_user) — gates NEW accounts only
 // ============================================================
-
-test("allowlist: a @mitwpu.edu.in email not on the list can't register, and no profile is created", async () => {
-  const email = uniq("not-allowed");
-  const r = await call(register, { full_name: "Outsider", email, password: "GoodPass123!" });
-  assert.equal(r.status, 403);
-  assert.match(r.body.message, /not authorized to register/);
-  assert.equal(await profileOf(email), undefined);
-});
-
-test("allowlist: an allowlisted email registers (case-insensitive match)", async () => {
-  const email = await allow(uniq("allowed"));
-  const r = await call(register, { full_name: "Insider", email: email.toUpperCase(), password: "GoodPass123!" });
-  assert.equal(r.status, 201);
-  createdEmails.push(email.toUpperCase()); // register stores the email as typed
-});
-
-test("allowlist: the domain check still runs first", async () => {
-  const r = await call(register, { full_name: "Outsider", email: "someone@gmail.com", password: "GoodPass123!" });
-  assert.equal(r.status, 403);
-  assert.match(r.body.message, /restricted to @mitwpu\.edu\.in/);
-});
-
-test("allowlist: an existing account not on the list can still log in", async () => {
-  const u = await makeVerifiedUser("Existing Unlisted");
-  const r = await call(login, { email: u.email, password: "UserPass123!" });
-  assert.equal(r.status, 200);
-});
 
 test("allowlist: Google sign-in creates only allowlisted accounts, but links existing ones regardless", async () => {
   const gid = () => `test-google-${Date.now()}-${Math.random()}`;
@@ -270,7 +102,7 @@ test("allowlist: Google sign-in creates only allowlisted accounts, but links exi
 
 // ============================================================
 // Session helpers for HTTP tests — mint cookies directly instead of logging
-// in (the login limiter is 10/15 min per IP and the other suites use it).
+// in (there is no password, and codes only exist inside the emailed message).
 // ============================================================
 
 async function makeVerifiedUser(fullName, { admin = false } = {}) {
@@ -278,20 +110,15 @@ async function makeVerifiedUser(fullName, { admin = false } = {}) {
   createdEmails.push(email);
   const { rows: [u] } = await pool.query(
     `INSERT INTO profiles (full_name, email, email_verified, is_admin)
-     VALUES ($1, $2, TRUE, $3) RETURNING id, token_version`,
+     VALUES ($1, $2, TRUE, $3) RETURNING id`,
     [fullName, email, admin]
   );
-  await pool.query("INSERT INTO user_auth (user_id, password_hash) VALUES ($1, $2)", [
-    u.id, await bcrypt.hash("UserPass123!", 4),
-  ]);
-  return { id: u.id, email, cookie: `token=${generateToken(u.id, u.token_version)}` };
+  const s = await sessionFor(u.id);
+  return { id: u.id, email, cookie: s.cookie, token: s.token };
 }
 
 async function adminCookie() {
-  const { token_version } = (
-    await pool.query("SELECT token_version FROM profiles WHERE id = $1", [adminId])
-  ).rows[0];
-  return `token=${generateToken(adminId, token_version)}`;
+  return (await sessionFor(adminId)).cookie;
 }
 
 async function http(method, path, cookie, body) {
@@ -348,47 +175,25 @@ test("2.2 F4: renaming yourself to a template's teacher_name does not grant canc
 });
 
 // ============================================================
-// 2.3 [F8] — forgot-password abuse (per-email limit + DB cooldown)
+// 2.3 [F8] — code-request abuse (per-email limit, not just per IP)
 // ============================================================
 
-async function resetJobsFor(email) {
-  const jobs = await emailQueue.getJobs(["waiting", "delayed", "active", "failed", "completed", "paused"]);
-  return jobs.filter((j) => j?.name === "password-reset" && j.data?.to === email).length;
-}
-
-test("2.3 F8: a second forgot-password inside the cooldown re-issues nothing", async () => {
-  const u = await makeVerifiedUser("Reset Target");
-  let r = await call(forgotPassword, { email: u.email });
-  assert.equal(r.status, 200);
-  const first = (await pool.query("SELECT id, created_at FROM password_reset_tokens WHERE user_id = $1", [u.id])).rows;
-  assert.equal(first.length, 1);
-  const jobsAfterFirst = await resetJobsFor(u.email);
-  assert.equal(jobsAfterFirst, 1);
-
-  r = await call(forgotPassword, { email: u.email });
-  assert.equal(r.status, 200);
-  assert.match(r.body.message, /If that email is registered/, "same generic response");
-  const second = (await pool.query("SELECT id, created_at FROM password_reset_tokens WHERE user_id = $1", [u.id])).rows;
-  assert.deepEqual(second, first, "the in-flight reset link must stay valid (not deleted/re-issued)");
-  assert.equal(await resetJobsFor(u.email), jobsAfterFirst, "no second email enqueued");
-});
-
-test("2.3 F8: POST /user/forgot-password is limited per email, not just per IP", async () => {
-  const email = uniq("f8-http"); // needn't exist — the limiter must not reveal that
+test("2.3 F8: POST /user/otp/request is limited per email, not just per IP", async () => {
+  const email = uniq("f8-http"); // valid domain but not allowlisted: no code is ever sent
   const statuses = [];
-  for (let i = 0; i < 4; i++) {
-    statuses.push((await http("POST", "/user/forgot-password", null, { email })).status);
+  for (let i = 0; i < 6; i++) {
+    statuses.push((await http("POST", "/user/otp/request", null, { email })).status);
   }
-  assert.deepEqual(statuses, [200, 200, 200, 429]);
+  assert.deepEqual(statuses, [403, 403, 403, 403, 403, 429]);
 });
 
 test("2.3: the per-email limiter heals a counter key that lost its TTL", async () => {
   const redis = new IORedis(process.env.REDIS_URL);
   try {
     const email = uniq("ttl");
-    const key = `rl:otp-email:${email}`; // perEmailLimiter on /resend-verification (own per-IP bucket)
+    const key = `rl:otp-email:${email}`;
     await redis.set(key, "1"); // what a failed PEXPIRE used to leave behind: a counter that never expires
-    assert.equal((await http("POST", "/user/resend-verification", null, { email })).status, 200);
+    assert.equal((await http("POST", "/user/otp/request", null, { email })).status, 403);
     const ttl = await redis.pttl(key);
     assert.ok(ttl > 0, `key must have a TTL again, got ${ttl}`);
     await redis.del(key);
@@ -401,7 +206,7 @@ test("2.3: the per-email limiter heals a counter key that lost its TTL", async (
 // 2.4 — full_name validation (register + PATCH /user/me)
 // ============================================================
 
-test("2.4: full_name is trimmed, 1–100 chars, no control characters", async () => {
+test("2.4: PATCH /user/me full_name is trimmed, 1–100 chars, no control characters", async () => {
   const u = await makeVerifiedUser("Valid Name");
   for (const bad of ["   ", "x".repeat(101), "Dr.\u0000Target", "Line\nBreak", "Tab\tName"]) {
     const r = await http("PATCH", "/user/me", u.cookie, { full_name: bad });
@@ -410,14 +215,6 @@ test("2.4: full_name is trimmed, 1–100 chars, no control characters", async ()
   let r = await http("PATCH", "/user/me", u.cookie, { full_name: "  Dr. Spaced  " });
   assert.equal(r.status, 200);
   assert.equal(r.body.user.full_name, "Dr. Spaced");
-
-  r = await call(register, { full_name: "Evil\u0007Bell", email: uniq("f24"), password: "GoodPass123!" });
-  assert.equal(r.status, 400);
-  const email = await allow(uniq("f24ok"));
-  createdEmails.push(email);
-  r = await call(register, { full_name: "  Padded Name ", email, password: "GoodPass123!" });
-  assert.equal(r.status, 201);
-  assert.equal((await profileOf(email)).full_name, "Padded Name");
 });
 
 // ============================================================
@@ -439,13 +236,12 @@ test("2.5: state-changing requests need an allowed Origin when a session cookie 
   assert.equal((await patch({ Cookie: u.cookie, Origin: BASE_URL })).status, 200, "the API's own origin");
   // Non-browser clients authenticate with a Bearer header, which a cross-site
   // page can't attach — no Origin needed.
-  const bearer = u.cookie.slice("token=".length);
-  assert.equal((await patch({ Authorization: `Bearer ${bearer}` })).status, 200);
+  assert.equal((await patch({ Authorization: `Bearer ${u.token}` })).status, 200);
   // Reads are not affected.
   assert.equal((await fetch(`${BASE_URL}/user/me`, { headers: { Cookie: u.cookie } })).status, 200);
 });
 
-test("2.5: production drops the localhost origins (Express + Socket.IO) and sets strict cookie flags", async () => {
+test("2.5: production drops the localhost origins (Express + Socket.IO) and sets strict session-cookie flags", async () => {
   const PORT = 3099;
   const prodUrl = `http://localhost:${PORT}`;
   const frontend = "https://vyas.iris-club.in";
@@ -473,16 +269,30 @@ test("2.5: production drops the localhost origins (Express + Socket.IO) and sets
     res = await fetch(`${prodUrl}/socket.io/?EIO=4&transport=polling`, { headers: { Origin: frontend } });
     assert.equal(res.headers.get("access-control-allow-origin"), frontend);
 
-    res = await fetch(`${prodUrl}/user/login`, {
+    // Sign in through the real endpoint in production mode (the code is seeded: the
+    // real one only exists in the email) and check the cookie the browser would store.
+    const { rows: [admin] } = await pool.query("SELECT email FROM profiles WHERE email = $1", [ADMIN_EMAIL]);
+    await pool.query(
+      "UPDATE auth_codes SET consumed_at = NOW() WHERE email = $1 AND purpose = 'login' AND consumed_at IS NULL",
+      [admin.email]
+    );
+    await pool.query(
+      `INSERT INTO auth_codes (email, purpose, code_hash, expires_at)
+       VALUES ($1, 'login', $2, NOW() + INTERVAL '10 minutes')`,
+      [admin.email, hashCode(admin.email, "login", "16161616")]
+    );
+    res = await fetch(`${prodUrl}/user/otp/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: frontend },
-      body: JSON.stringify({ email: ADMIN_EMAIL, password: "Admin@1234" }),
+      body: JSON.stringify({ email: admin.email, code: "16161616" }),
     });
     assert.equal(res.status, 200);
-    const cookie = res.headers.getSetCookie().find((c) => c.startsWith("token="));
+    const cookie = res.headers.getSetCookie().find((c) => c.startsWith("__Host-vyas_session="));
+    assert.ok(cookie, "production must use the __Host- prefixed cookie name");
     assert.match(cookie, /; HttpOnly/i);
     assert.match(cookie, /; Secure/i);
     assert.match(cookie, /; SameSite=Lax/i);
+    assert.match(cookie, /; Path=\//i);
     assert.doesNotMatch(cookie, /Domain=/i, "cookie must be host-only");
   } finally {
     child.kill();
@@ -490,42 +300,8 @@ test("2.5: production drops the localhost origins (Express + Socket.IO) and sets
 });
 
 // ============================================================
-// 2.6 — queue and token data hygiene
+// 2.6 — data hygiene
 // ============================================================
-
-async function latestResetJob(email) {
-  const jobs = await emailQueue.getJobs(["waiting", "delayed", "active", "failed", "completed", "paused"]);
-  return jobs.filter((j) => j?.name === "password-reset" && j.data?.to === email)
-    .sort((a, b) => b.timestamp - a.timestamp)[0];
-}
-
-test("2.6a: email jobs (which carry reset URLs) are kept at most 1 hour", async () => {
-  const u = await makeVerifiedUser("Retention Probe");
-  await call(forgotPassword, { email: u.email });
-  const job = await latestResetJob(u.email);
-  assert.ok(job, "reset email job not found");
-  for (const opt of ["removeOnComplete", "removeOnFail"]) {
-    const keep = job.opts[opt];
-    assert.ok(keep && typeof keep === "object", `${opt} must be an {age,count} policy`);
-    assert.ok(keep.age > 0 && keep.age <= 3600, `${opt}.age must be <= 1h, got ${keep.age}`);
-  }
-});
-
-test("2.6b: reset tokens are stored hashed; only the emailed plaintext works", async () => {
-  const u = await makeVerifiedUser("Hash Probe");
-  await call(forgotPassword, { email: u.email });
-  const plaintext = new URL((await latestResetJob(u.email)).data.resetUrl).searchParams.get("token");
-  const { rows: [row] } = await pool.query("SELECT * FROM password_reset_tokens WHERE user_id = $1", [u.id]);
-  const stored = row.token_hash ?? row.token;
-  assert.notEqual(stored, plaintext, "the DB must not hold the usable token");
-  assert.equal(stored, createHash("sha256").update(plaintext).digest("hex"));
-
-  let r = await call(resetPassword, { token: stored, password: "NewPassword123!" });
-  assert.equal(r.status, 400, "a leaked DB value must not work as a reset token");
-  r = await call(resetPassword, { token: plaintext, password: "NewPassword123!" });
-  assert.equal(r.status, 200);
-  assert.equal((await call(login, { email: u.email, password: "NewPassword123!" })).status, 200);
-});
 
 test("2.6c: the OTP encryption key is not the SHA-256 of JWT_SECRET", () => {
   const blob = Buffer.from(encryptOtp("123456"), "base64");

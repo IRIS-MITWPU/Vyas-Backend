@@ -12,7 +12,6 @@ if (process.env.NODE_ENV === "production") {
 }
 
 import pool from "./db.js";
-import bcrypt from "bcryptjs";
 
 async function seed() {
   const client = await pool.connect();
@@ -22,24 +21,12 @@ async function seed() {
     // ----------------------------------------------------------
     // Admin user
     // ----------------------------------------------------------
-    const adminHash = await bcrypt.hash("Admin@1234", 10);
-    const {
-      rows: [admin],
-    } = await client.query(
+    await client.query(
       `INSERT INTO profiles (full_name, email, is_admin, email_verified)
        VALUES ($1, $2, TRUE, TRUE)
        ON CONFLICT (email)
-       DO UPDATE SET full_name = EXCLUDED.full_name, is_admin = TRUE, email_verified = TRUE
-       RETURNING id`,
+       DO UPDATE SET full_name = EXCLUDED.full_name, is_admin = TRUE, email_verified = TRUE`,
       ["Admin User", "admin@mitwpu.edu.in"],
-    );
-
-    await client.query(
-      `INSERT INTO user_auth (user_id, password_hash)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id)
-       DO UPDATE SET password_hash = EXCLUDED.password_hash`,
-      [admin.id, adminHash],
     );
 
     // ----------------------------------------------------------
@@ -51,26 +38,13 @@ async function seed() {
       { name: "Dr. Ankit Desai", email: "ankit.desai@mitwpu.edu.in" },
     ];
 
-    const facultyHash = await bcrypt.hash("Faculty@123", 10);
-
     for (const f of faculty) {
-      const {
-        rows: [u],
-      } = await client.query(
+      await client.query(
         `INSERT INTO profiles (full_name, email, email_verified)
          VALUES ($1, $2, TRUE)
          ON CONFLICT (email)
-         DO UPDATE SET full_name = EXCLUDED.full_name, email_verified = TRUE
-         RETURNING id`,
+         DO UPDATE SET full_name = EXCLUDED.full_name, email_verified = TRUE`,
         [f.name, f.email],
-      );
-
-      await client.query(
-        `INSERT INTO user_auth (user_id, password_hash)
-         VALUES ($1, $2)
-         ON CONFLICT (user_id)
-         DO UPDATE SET password_hash = EXCLUDED.password_hash`,
-        [u.id, facultyHash],
       );
     }
 
@@ -284,8 +258,8 @@ async function seed() {
 
     await client.query("COMMIT");
     console.log("✅ Database seeded successfully");
-    console.log("   Admin    → admin@mitwpu.edu.in  / Admin@1234");
-    console.log("   Faculty  → ramesh.sharma@mitwpu.edu.in / Faculty@123");
+    console.log("   Admin    → admin@mitwpu.edu.in  (sign in with an emailed code)");
+    console.log("   Faculty  → ramesh.sharma@mitwpu.edu.in (sign in with an emailed code)");
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("❌ Seed failed:", err.message);

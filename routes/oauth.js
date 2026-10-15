@@ -23,7 +23,7 @@ router.get("/google/callback", oauthLimiter, (req, res, next) => {
       return googleFailure(req, res);
     }
     req.user = user;
-    return googleCallback(req, res);
+    return googleCallback(req, res).catch(next);
   })(req, res, next);
 });
 

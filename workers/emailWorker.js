@@ -9,9 +9,8 @@ import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import {
   sendWelcomeEmail,
-  sendPasswordResetEmail,
   sendBookingConfirmationEmail,
-  sendVerificationEmail,
+  sendLoginCodeEmail,
 } from "../services/emailService.js";
 import { decryptOtp } from "../utils/otpCrypto.js";
 
@@ -21,20 +20,20 @@ async function processEmail(job) {
       await sendWelcomeEmail(job.data.to, job.data.fullName);
       break;
 
-    case "password-reset":
-      await sendPasswordResetEmail(job.data.to, job.data.resetUrl);
-      break;
-
     case "booking-confirmation":
       await sendBookingConfirmationEmail(job.data);
       break;
 
+    // Job name kept from the old email-verification flow so jobs already
+    // queued at deploy time still run.
     case "verification-code":
-      await sendVerificationEmail(
+      await sendLoginCodeEmail(
         job.data.to,
         job.data.fullName,
         decryptOtp(job.data.encryptedCode),
-        job.data.expiresInMinutes
+        job.data.expiresInMinutes,
+        job.data.purpose,
+        job.data.requestedAt
       );
       break;
 

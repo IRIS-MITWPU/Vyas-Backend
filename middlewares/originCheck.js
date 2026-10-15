@@ -8,6 +8,7 @@
 //   - no Origin at all is only allowed when no session cookie is sent — i.e.
 //     non-browser clients using a Bearer header, which a page can't attach.
 import { allowedOrigins } from "../config/origins.js";
+import { COOKIE_NAME } from "../services/sessions.js";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -20,7 +21,7 @@ export function originCheck(req, res, next) {
     if (origin === self || allowedOrigins.includes(origin)) return next();
     return res.status(403).json({ error: "Origin not allowed" });
   }
-  if (req.cookies?.token) {
+  if (req.cookies?.[COOKIE_NAME]) {
     return res.status(403).json({ error: "Origin header required" });
   }
   next();

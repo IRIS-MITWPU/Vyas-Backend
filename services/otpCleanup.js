@@ -1,34 +1,29 @@
 // services/otpCleanup.js
 //
-// A user who registers and never verifies stays as an unverified `profiles`
-// row indefinitely otherwise — this sweeps those away 24h after creation, per
-// otp-1's design default. Mirrors the interval-sweep pattern already
-// established by services/importReconciliation.js.
+// Hourly sweep of auth data that has no further use: sign-in codes a day past
+// expiry, and revoked/expired sessions (see purgeDeadSessions). Mirrors the
+// interval-sweep pattern established by services/importReconciliation.js.
+// (Name and exports kept from the old unverified-account sweep so app.js and
+// worker.js need no change.)
 import pool from "../database/db.js";
+import { purgeDeadSessions } from "./sessions.js";
 
-const UNVERIFIED_ACCOUNT_TTL_HOURS = 24;
-
-export async function cleanupUnverifiedAccounts() {
-  // Deleting the profile cascades to user_auth and email_verification_codes
-  // (both FK ON DELETE CASCADE) — no other query needed.
-  const result = await pool.query(
-    `DELETE FROM profiles
-     WHERE email_verified = FALSE
-       AND created_at < NOW() - ($1 || ' hours')::interval
-     RETURNING id`,
-    [UNVERIFIED_ACCOUNT_TTL_HOURS]
+export async function cleanupAuthData() {
+  const codes = await pool.query(
+    "DELETE FROM auth_codes WHERE expires_at < NOW() - INTERVAL '1 day'"
   );
-  if (result.rows.length) {
-    console.log(`[OtpCleanup] removed ${result.rows.length} abandoned unverified account(s)`);
+  const sessions = await purgeDeadSessions();
+  if (codes.rowCount || sessions) {
+    console.log(`[AuthCleanup] removed ${codes.rowCount} old code(s), ${sessions} dead session(s)`);
   }
 }
 
 let intervalHandle = null;
 
 export function startOtpCleanupSweep(intervalMs = 60 * 60 * 1000) {
-  cleanupUnverifiedAccounts().catch((err) => console.error("[OtpCleanup] Startup sweep failed:", err.message));
+  cleanupAuthData().catch((err) => console.error("[AuthCleanup] Startup sweep failed:", err.message));
   intervalHandle = setInterval(() => {
-    cleanupUnverifiedAccounts().catch((err) => console.error("[OtpCleanup] Periodic sweep failed:", err.message));
+    cleanupAuthData().catch((err) => console.error("[AuthCleanup] Periodic sweep failed:", err.message));
   }, intervalMs);
   intervalHandle.unref();
   return intervalHandle;

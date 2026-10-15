@@ -354,7 +354,7 @@ test("4.6: upload content must match the declared type (magic bytes)", async () 
 // 5.2 — rate limiter must survive a blocked event loop at startup
 // ============================================================
 
-test("5.2: limiter store init survives a slow SCRIPT LOAD (11th bad login is still 429)", () => {
+test("5.2: limiter store init survives a slow SCRIPT LOAD (31st oauth request is still 429)", () => {
   // rate-limit-redis fires SCRIPT LOAD once, at construction, and caches a
   // failure forever (=> every limiter silently fails open). Simulate a slow
   // host / blocked event loop by delivering every SCRIPT reply 4s late: past
@@ -369,15 +369,15 @@ test("5.2: limiter store init survives a slow SCRIPT LOAD (11th bad login is sti
       }
       return realSend.call(this, command, stream);
     };
-    const { loginLimiter } = await import(${JSON.stringify(mod("middlewares/rateLimiter.js"))});
+    const { oauthLimiter } = await import(${JSON.stringify(mod("middlewares/rateLimiter.js"))});
     const { default: express } = await import("express");
     const app = express();
     app.set("trust proxy", true);
-    app.post("/login", loginLimiter, (req, res) => res.status(401).end());
+    app.post("/login", oauthLimiter, (req, res) => res.status(401).end());
     const server = app.listen(0);
     const ip = "203.0.113." + (1 + Math.floor(Math.random() * 250));
     const statuses = [];
-    for (let i = 0; i < 11; i++) {
+    for (let i = 0; i < 31; i++) {
       const r = await fetch("http://127.0.0.1:" + server.address().port + "/login", { method: "POST", headers: { "x-forwarded-for": ip } });
       statuses.push(r.status);
     }

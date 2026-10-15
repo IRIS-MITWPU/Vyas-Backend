@@ -1,91 +1,61 @@
 // tests/auth.test.js — run via `npm test`
 //
-// Integration tests against a REAL running server + database (this repo has
-// no isolated test-DB setup yet — see REMAINING.md). Start the server first:
-//   npm run dev
+// Integration tests against a REAL running server + database + Redis (this repo
+// has no isolated test-DB setup). Start the dev stack and server first:
+//   docker compose -f docker-compose.dev.yml up -d
+//   RUN_WORKERS=false npm run dev        # RUN_WORKERS=false: never send real email
 // then in another terminal:
-//   npm test
+//   npm run test:reset && npm test
 //
-// Requires an existing seeded admin account (admin@mitwpu.edu.in / Admin@1234
-// — see database/seed.js) for the login tests; the registration test creates
-// and cleans up its own throwaway user.
+// Sign-in is by emailed code only. The real code exists only inside the queued
+// email, so tests store a code they know (tests/helpers/auth.js) — the server has
+// no bypass. More coverage of the flow itself is in otp-auth.test.js.
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import pool from "../database/db.js";
+import { BASE_URL, http, seedCode, sessionCookieFrom, uniqEmail } from "./helpers/auth.js";
 
-const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
-const ADMIN_EMAIL = "admin@mitwpu.edu.in";
-const ADMIN_PASSWORD = "Admin@1234";
-
-// Must be @mitwpu.edu.in — isAllowedDomain() rejects anything else with 403.
-const testEmail = `test-${Date.now()}@mitwpu.edu.in`;
-const testPassword = "TestPass123!";
-let createdUserId;
+// Must be @mitwpu.edu.in and on the staff allowlist, or no account can be created.
+const testEmail = uniqEmail("auth");
 
 after(async () => {
-  if (createdUserId) {
-    await pool.query("DELETE FROM profiles WHERE id = $1", [createdUserId]);
-  }
+  await pool.query("DELETE FROM profiles WHERE email = $1", [testEmail]);
+  await pool.query("DELETE FROM auth_codes WHERE email = $1", [testEmail]);
   await pool.query("DELETE FROM allowed_user WHERE email = $1", [testEmail]);
   await pool.end();
 });
 
-test("POST /user/register — happy path creates an unverified user, no session", async () => {
-  // Registration is gated by the staff allowlist.
+test("sign-up and sign-in are one flow: request a code, verify it, get a session", async () => {
   await pool.query("INSERT INTO allowed_user (email, full_name) VALUES ($1, 'Test User')", [testEmail]);
-  const res = await fetch(`${BASE_URL}/user/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      full_name: "Test User",
-      email: testEmail,
-      password: testPassword,
-    }),
-  });
-  const body = await res.json();
-  assert.equal(res.status, 201);
-  // Registration no longer auto-logs in: it starts the OTP verify-email flow.
-  // No token, no user object, and no session cookie until /user/verify-email.
-  assert.equal(body.requiresVerification, true);
-  assert.equal(body.email, testEmail);
-  assert.equal(body.token, undefined);
-  assert.equal(res.headers.getSetCookie().length, 0);
 
-  createdUserId = (
-    await pool.query("SELECT id FROM profiles WHERE email = $1", [testEmail])
-  ).rows[0].id;
+  const req = await http("POST", "/user/otp/request", { body: { email: testEmail } });
+  assert.equal(req.status, 200);
+  assert.equal(req.headers.getSetCookie().length, 0, "requesting a code logs nobody in");
+
+  await seedCode(testEmail, "24681357");
+  const res = await http("POST", "/user/otp/verify", { body: { email: testEmail, code: "24681357" } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.user.email, testEmail);
+  assert.equal(res.body.token, undefined, "the session token is only ever an httpOnly cookie");
+
+  const cookie = sessionCookieFrom(res).split(";")[0];
+  const me = await http("GET", "/user/me", { cookie });
+  assert.equal(me.status, 200);
+  assert.equal(me.body.user.email, testEmail);
 });
 
-test("GET /user/me — without a token is rejected", async () => {
+test("GET /user/me — without a session is rejected", async () => {
   const res = await fetch(`${BASE_URL}/user/me`);
   assert.equal(res.status, 401);
 });
 
-test("POST /user/login — wrong password is rejected", async () => {
-  const res = await fetch(`${BASE_URL}/user/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: ADMIN_EMAIL, password: "definitely-wrong" }),
-  });
+test("GET /user/me — a made-up session cookie is rejected", async () => {
+  const res = await fetch(`${BASE_URL}/user/me`, { headers: { Cookie: "vyas_session=not-a-real-session-token-0123456789" } });
   assert.equal(res.status, 401);
 });
 
-test("POST /user/login — correct credentials succeed", async () => {
-  const res = await fetch(`${BASE_URL}/user/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD }),
-  });
-  const body = await res.json();
-  assert.equal(res.status, 200);
-  // The JWT is delivered only as an httpOnly cookie — deliberately no longer
-  // echoed in the response body, where page JS could read it.
-  assert.equal(body.token, undefined);
-  assert.ok(res.headers.getSetCookie().some((c) => c.startsWith("token=")));
-});
-
-test("POST /booking — without a token is rejected", async () => {
+test("POST /booking — without a session is rejected", async () => {
   const res = await fetch(`${BASE_URL}/booking`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

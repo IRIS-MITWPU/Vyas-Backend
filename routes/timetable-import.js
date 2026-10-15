@@ -6,7 +6,7 @@ import { S3Client, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client
 import path from 'path';
 import { randomUUID } from 'crypto';
 import pool from '../database/db.js';
-import { protect, adminOnly } from '../middlewares/authMiddleware.js';
+import { protect, adminOnly, requireFreshAuth } from '../middlewares/authMiddleware.js';
 import { IMPORT_CONFIG } from '../config/importConfig.js';
 import {
   enqueueImportJob, enqueueBookingGeneration, tryRemoveUnstartedQueueJob, enqueueRetryFailedChunks,
@@ -407,7 +407,7 @@ router.patch('/jobs/:jobId/conflicts/:conflictId/resolve', protect, adminOnly, a
 // ==============================
 // POST /timetable-import/jobs/:jobId/approve — approve + trigger booking generation
 // ==============================
-router.post('/jobs/:jobId/approve', protect, adminOnly, async (req, res) => {
+router.post('/jobs/:jobId/approve', protect, adminOnly, requireFreshAuth, async (req, res) => {
   const { jobId } = req.params;
 
   try {
@@ -503,7 +503,7 @@ router.post('/jobs/:jobId/stop', protect, adminOnly, async (req, res) => {
 // ==============================
 // DELETE /timetable-import/jobs/:jobId — hard delete, files + all child rows
 // ==============================
-router.delete('/jobs/:jobId', protect, adminOnly, async (req, res) => {
+router.delete('/jobs/:jobId', protect, adminOnly, requireFreshAuth, async (req, res) => {
   const { jobId } = req.params;
   const client = await pool.connect();
 

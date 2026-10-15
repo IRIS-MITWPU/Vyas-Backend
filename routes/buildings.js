@@ -1,6 +1,6 @@
 import express from "express";
 import pool from "../database/db.js";
-import { adminOnly, protect } from "../middlewares/authMiddleware.js";
+import { adminOnly, protect, requireFreshAuth } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
 
@@ -230,7 +230,7 @@ router.post("/", protect, adminOnly, async (req, res) => {
 });
 
 // DELETE /buildings/:id → delete building (admin only)
-router.delete("/:id", protect, adminOnly, async (req, res) => {
+router.delete("/:id", protect, adminOnly, requireFreshAuth, async (req, res) => {
   const { id } = req.params;
 
   const client = await pool.connect();
@@ -452,7 +452,7 @@ router.post("/:id/floor", protect, adminOnly, async (req, res) => {
 });
 
 // DELETE /buildings/floor/:id → delete floor by id
-router.delete("/floor/:id", protect, adminOnly, async (req, res) => {
+router.delete("/floor/:id", protect, adminOnly, requireFreshAuth, async (req, res) => {
   const { id } = req.params;
 
   const client = await pool.connect();
@@ -840,7 +840,7 @@ router.put("/room/:id", protect, adminOnly, async (req, res) => {
 });
 
 // DELETE /room/:id → delete room
-router.delete("/room/:id", protect, adminOnly, async (req, res) => {
+router.delete("/room/:id", protect, adminOnly, requireFreshAuth, async (req, res) => {
   const { id } = req.params;
 
   const client = await pool.connect();

@@ -1,28 +1,37 @@
 // routes/users.js
 import express from "express";
 import {
-  register,
-  login,
-  forgotPassword,
-  resetPassword,
-  verifyEmail,
-  resendVerification,
-  cookieOptions,
+  requestCode,
+  verifyCode,
+  reauthRequest,
+  reauthVerify,
+  logout,
+  logoutAll,
+  listSessions,
+  revokeSessionById,
   fullNameSchema,
 } from "../controllers/userController.js";
-import { protect, adminOnly } from "../middlewares/authMiddleware.js";
-import { loginLimiter, authLimiter, otpVerifyLimiter, otpEmailLimiter, resetEmailLimiter } from "../middlewares/rateLimiter.js";
+import { protect, adminOnly, requireFreshAuth } from "../middlewares/authMiddleware.js";
+import { otpRequestLimiter, otpVerifyLimiter, otpEmailLimiter } from "../middlewares/rateLimiter.js";
 import pool from "../database/db.js";
 import { logAuditEvent } from "../services/auditLog.js";
 
 const router = express.Router();
 
-router.post("/register", authLimiter, otpEmailLimiter, register);
-router.post("/login", loginLimiter, login);
-router.post("/forgot-password", authLimiter, resetEmailLimiter, forgotPassword);
-router.post("/reset-password", authLimiter, resetPassword);
-router.post("/verify-email", otpVerifyLimiter, otpEmailLimiter, verifyEmail);
-router.post("/resend-verification", otpVerifyLimiter, otpEmailLimiter, resendVerification);
+// Email-code sign-in (the only way in besides Google). Passwords no longer exist.
+router.post("/otp/request", otpRequestLimiter, otpEmailLimiter, requestCode);
+router.post("/otp/verify", otpVerifyLimiter, verifyCode);
+
+// Step-up: a fresh code before destructive/admin actions (see requireFreshAuth).
+router.post("/reauth/request", protect, otpRequestLimiter, reauthRequest);
+router.post("/reauth/verify", protect, otpVerifyLimiter, reauthVerify);
+
+// The old password endpoints are gone for good.
+const gone = (req, res) =>
+  res.status(410).json({ error: "Passwords are no longer used. Sign in with an emailed code." });
+for (const path of ["/register", "/login", "/forgot-password", "/reset-password", "/verify-email", "/resend-verification"]) {
+  router.post(path, gone);
+}
 
 // ==============================
 // GET /user/me — current user's profile
@@ -93,36 +102,13 @@ router.patch("/me", protect, async (req, res) => {
 });
 
 // ==============================
-// POST /user/logout — clear auth cookie
+// Sessions: sign out (revokes this session server-side, so a copied cookie
+// dies too), sign out everywhere, and the "your devices" list.
 // ==============================
-// Cleared with the same attributes it was set with — a clearCookie whose
-// sameSite/secure don't match the original isn't guaranteed to remove it.
-// (maxAge is ignored by clearCookie, which sets its own expiry.)
-router.post("/logout", (req, res) => {
-  res.clearCookie("token", cookieOptions);
-  res.json({ success: true, message: "Logged out" });
-});
-
-// ==============================
-// POST /user/logout-all — revoke every session for this user
-// ==============================
-// Bumping token_version invalidates every JWT already issued to this user.
-// Other devices lose REST access on their next request, and their sockets
-// drop at the next reconnect (sockets/index.js re-checks token_version).
-router.post("/logout-all", protect, async (req, res) => {
-  try {
-    await pool.query(
-      "UPDATE profiles SET token_version = token_version + 1 WHERE id = $1",
-      [req.user.id],
-    );
-    logAuditEvent({ actorUserId: req.user.id, action: "session.revoked_all" });
-    res.clearCookie("token", cookieOptions);
-    res.json({ success: true, message: "Logged out of all devices" });
-  } catch (err) {
-    console.error("Error revoking sessions:", err);
-    res.status(500).json({ success: false, error: "Failed to log out of all devices" });
-  }
-});
+router.post("/logout", logout);
+router.post("/logout-all", protect, logoutAll);
+router.get("/sessions", protect, listSessions);
+router.delete("/sessions/:id", protect, revokeSessionById);
 
 // ==============================
 // GET /user/search — search users for invitees
@@ -166,7 +152,7 @@ router.get("/all", protect, adminOnly, async (req, res) => {
 // ==============================
 // ADMIN: TOGGLE is_admin FLAG
 // ==============================
-router.patch("/:id/admin", protect, adminOnly, async (req, res) => {
+router.patch("/:id/admin", protect, adminOnly, requireFreshAuth, async (req, res) => {
   const { id } = req.params;
 
   if (id === req.user.id) {

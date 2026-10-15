@@ -4,16 +4,6 @@ import { isAllowedUser } from "../utils/allowedUser.js";
 
 const PROVIDER = "google";
 
-export class UnverifiedAccountExistsError extends Error {
-  constructor(email) {
-    super(
-      "An account with this email already exists but hasn't completed email verification."
-    );
-    this.name = "UnverifiedAccountExistsError";
-    this.email = email;
-  }
-}
-
 export class NotAllowedUserError extends Error {
   constructor(email) {
     super("This email is not on the staff allowlist.");
@@ -25,21 +15,14 @@ export class NotAllowedUserError extends Error {
 /**
  * Find or create a profiles row for a verified Google sign-in.
  *
- * - If a profiles row exists for the email AND email_verified=true: auto-link
- *   (idempotent — repeat sign-ins for the same Google account don't duplicate
- *   the oauth_identities row).
- * - If a profiles row exists for the email but email_verified=false: refuse.
- *   That row's owner never proved they control this email address (password
- *   registered, OTP never completed) — silently linking Google's verification
- *   onto it would hand Google-account access to whatever unverified row
- *   happens to share the email, which is a real account-takeover vector, not
- *   a theoretical one. Caller (oauthController) surfaces this as a redirect
- *   telling the user to complete/reset the existing registration first.
- * - Else: create a new profiles row (email_verified=true, no user_auth row —
- *   OAuth-only accounts never get a password hash) + its oauth_identities row.
+ * - If a profiles row exists for the email: auto-link (idempotent — repeat
+ *   sign-ins for the same Google account don't duplicate the oauth_identities
+ *   row). Every profile is email-verified: accounts are only ever created after
+ *   proving mailbox control (an emailed code, or this Google sign-in).
+ * - Else, if the email is on the staff allowlist: create the profile + its
+ *   oauth_identities row. Otherwise NotAllowedUserError.
  *
- * Returns the profiles row shape needed for token issuance downstream
- * (id, token_version, is_admin).
+ * Returns the profiles row needed to start a session (id, is_admin, ...).
  */
 export async function findOrCreateGoogleUser({ googleId, email, fullName }) {
   const client = await pool.connect();
@@ -47,8 +30,7 @@ export async function findOrCreateGoogleUser({ googleId, email, fullName }) {
     await client.query("BEGIN");
 
     const existing = await client.query(
-      `SELECT id, full_name, email, is_admin, token_version, email_verified
-       FROM profiles WHERE email = $1`,
+      `SELECT id, full_name, email, is_admin FROM profiles WHERE email = $1`,
       [email]
     );
 
@@ -56,10 +38,6 @@ export async function findOrCreateGoogleUser({ googleId, email, fullName }) {
 
     if (existing.rows.length > 0) {
       profile = existing.rows[0];
-
-      if (!profile.email_verified) {
-        throw new UnverifiedAccountExistsError(email);
-      }
 
       await client.query(
         `INSERT INTO oauth_identities (user_id, provider, provider_user_id)
@@ -77,7 +55,7 @@ export async function findOrCreateGoogleUser({ googleId, email, fullName }) {
       const inserted = await client.query(
         `INSERT INTO profiles (full_name, email, email_verified)
          VALUES ($1, $2, TRUE)
-         RETURNING id, full_name, email, is_admin, token_version, email_verified`,
+         RETURNING id, full_name, email, is_admin`,
         [fullName, email]
       );
       profile = inserted.rows[0];

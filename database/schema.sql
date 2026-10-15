@@ -35,7 +35,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE TABLE IF NOT EXISTS profiles (
   id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   full_name     TEXT        NOT NULL,
-  email         TEXT        UNIQUE NOT NULL,
+  email         TEXT        UNIQUE NOT NULL CONSTRAINT profiles_email_lower CHECK (email = lower(email)),
   department    TEXT,
   is_admin      BOOLEAN     NOT NULL DEFAULT FALSE,
   token_version INTEGER     NOT NULL DEFAULT 0,
@@ -96,6 +96,36 @@ CREATE TABLE IF NOT EXISTS allowed_user (
   phone      TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ============================================================
+-- AUTH CODES + SESSIONS  (OTP-only sign-in — migration 014)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS auth_codes (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  email       TEXT        NOT NULL CHECK (email = lower(email)),
+  purpose     TEXT        NOT NULL CHECK (purpose IN ('login', 'reauth')),
+  code_hash   TEXT        NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  attempts    INT         NOT NULL DEFAULT 0,
+  consumed_at TIMESTAMPTZ,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_auth_codes_email ON auth_codes(email, purpose, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  token_hash   TEXT        NOT NULL UNIQUE,
+  user_id      UUID        NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  remember     BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reauth_at    TIMESTAMPTZ,
+  user_agent   TEXT,
+  ip           TEXT,
+  revoked_at   TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id) WHERE revoked_at IS NULL;
 
 -- ============================================================
 -- BUILDINGS

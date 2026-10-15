@@ -3,11 +3,7 @@ import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
 import { OAuth2Client } from "google-auth-library";
 import { isAllowedDomain } from "../utils/emailDomain.js";
-import {
-  findOrCreateGoogleUser,
-  UnverifiedAccountExistsError,
-  NotAllowedUserError,
-} from "../models/oauthModel.js";
+import { findOrCreateGoogleUser, NotAllowedUserError } from "../models/oauthModel.js";
 import { CookieStateStore } from "./oauthStateStore.js";
 
 // Used only to cryptographically verify the ID token's signature/claims —
@@ -61,9 +57,6 @@ passport.use(
         });
         return done(null, user);
       } catch (err) {
-        if (err instanceof UnverifiedAccountExistsError) {
-          return done(null, false, { message: "UNVERIFIED_ACCOUNT_EXISTS" });
-        }
         if (err instanceof NotAllowedUserError) {
           return done(null, false, { message: "NOT_ALLOWED" });
         }
@@ -74,6 +67,6 @@ passport.use(
 );
 
 // No serializeUser/deserializeUser — never used, since every route runs
-// with session:false (JWT-cookie sessions, same as the rest of the app).
+// with session:false (our own DB-backed session cookie, same as the rest of the app).
 
 export default passport;

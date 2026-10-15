@@ -1,14 +1,23 @@
 // controllers/oauthController.js
-import { generateToken, cookieOptions } from "./userController.js";
+import { createSession, setSessionCookie } from "../services/sessions.js";
+import { logAuditEvent } from "../services/auditLog.js";
 
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
 
 // req.user here is the profiles row returned by findOrCreateGoogleUser via
 // the passport verify callback — never request-influenced data.
-export function googleCallback(req, res) {
+export async function googleCallback(req, res) {
   const user = req.user;
-  const token = generateToken(user.id, user.token_version);
-  res.cookie("token", token, cookieOptions);
+  // Google sign-in is an explicit choice on the user's own account, so it gets the
+  // normal ("keep me signed in") session; Google's own login on the device is the
+  // real gate on a shared computer.
+  const { token } = await createSession(user.id, {
+    remember: true,
+    ip: req.ip,
+    userAgent: req.get("user-agent") ?? null,
+  });
+  setSessionCookie(res, token, { isAdmin: user.is_admin, remember: true });
+  logAuditEvent({ actorUserId: user.id, action: "login.succeeded", metadata: { method: "google" } });
   // FRONTEND_ORIGIN is env-configured, not derived from the request — no
   // open-redirect surface here.
   res.redirect(`${FRONTEND_ORIGIN}/auth/callback`);
@@ -16,7 +25,6 @@ export function googleCallback(req, res) {
 
 const ERROR_QUERY_PARAMS = {
   DOMAIN_NOT_ALLOWED: "domain_not_allowed",
-  UNVERIFIED_ACCOUNT_EXISTS: "unverified_account_exists",
   NOT_ALLOWED: "not_allowed",
   OAUTH_FAILED: "oauth_failed",
 };

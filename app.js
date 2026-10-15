@@ -55,6 +55,21 @@ const { default: timetableImportRoutes } = await import("./routes/timetable-impo
 const { default: initSockets }           = await import("./sockets/index.js");
 const { default: pool }                  = await import("./database/db.js");
 
+// Fail fast if the schema is behind the code. Without this, a forgotten
+// migration shows up as an opaque 500 on every sign-in attempt.
+try {
+  const { rows: [schema] } = await pool.query(
+    "SELECT to_regclass('public.sessions') IS NOT NULL AND to_regclass('public.auth_codes') IS NOT NULL AS ok"
+  );
+  if (!schema.ok) {
+    console.error("❌ Database is missing the sign-in tables (migration 014). Run: npm run db:migrate");
+    process.exit(1);
+  }
+} catch (err) {
+  console.error("❌ Could not check the database schema:", err.message);
+  process.exit(1);
+}
+
 // Email queue + Bull Board dashboard
 const { emailQueue }              = await import("./services/emailQueue.js");
 // Background jobs run in-process by default (dev). In production set
@@ -89,7 +104,7 @@ app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(morgan("combined"));
 app.use(express.json());
 app.use(cookieParser());
-app.use(passport.initialize()); // no passport.session() — JWT-cookie sessions only, session:false everywhere
+app.use(passport.initialize()); // no passport.session() — our own DB-backed session cookie only, session:false everywhere
 app.use(originCheck); // CSRF: allowed Origin required on cookie-authenticated writes
 
 app.use(
@@ -103,8 +118,8 @@ app.use(
   })
 );
 
-// Baseline rate limit for all routes — loginLimiter/authLimiter (routes/users.js)
-// apply tighter limits on top of this for the auth endpoints specifically.
+// Baseline rate limit for all routes — the OTP limiters (routes/users.js) and
+// oauthLimiter apply their own limits on top of this for the auth endpoints.
 app.use(generalLimiter);
 
 // ============================================================

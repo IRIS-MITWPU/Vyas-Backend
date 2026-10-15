@@ -16,6 +16,25 @@ const KEY = Buffer.from(
   crypto.hkdfSync("sha256", process.env.JWT_SECRET, "vyas", "otp-email-encryption-v1", 32)
 );
 
+// Stored hash of a code. HMAC (not bcrypt): bcryptjs is pure JS and blocks the
+// event loop for ~70ms per compare, which is a DoS lever once every login does
+// one. Brute force is stopped by the 5-attempt cap, not by a slow hash. The
+// email and purpose are bound in, so a code is only ever valid for the address
+// and action it was issued for.
+const HASH_KEY = Buffer.from(
+  crypto.hkdfSync("sha256", process.env.JWT_SECRET, "vyas", "auth-code-hash-v1", 32)
+);
+
+export function hashCode(email, purpose, code) {
+  return crypto.createHmac("sha256", HASH_KEY).update(`${email}\0${purpose}\0${code}`).digest("hex");
+}
+
+export function codeMatches(email, purpose, code, storedHash) {
+  const a = Buffer.from(hashCode(email, purpose, code), "hex");
+  const b = Buffer.from(String(storedHash), "hex");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 export function encryptOtp(code) {
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv(ALGORITHM, KEY, iv);

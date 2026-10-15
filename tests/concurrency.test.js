@@ -16,10 +16,10 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import pool from "../database/db.js";
+import { sessionFor } from "./helpers/auth.js";
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:3000";
 const ADMIN_EMAIL = "admin@mitwpu.edu.in";
-const ADMIN_PASSWORD = "Admin@1234";
 
 let authCookie;
 let buildingId, floorId, roomId;
@@ -39,16 +39,7 @@ function nextWeekdayAt(hour, daysAhead = 1) {
 }
 
 before(async () => {
-  const loginRes = await fetch(`${BASE_URL}/user/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD }),
-  });
-  const loginBody = await loginRes.json();
-  assert.equal(loginRes.status, 200, "admin login must succeed for this test to run");
-  // The JWT is delivered only as an httpOnly cookie now — it is deliberately
-  // no longer echoed in the response body (it would be readable by page JS).
-  authCookie = loginRes.headers.getSetCookie().find((c) => c.startsWith("token=")).split(";")[0];
+  authCookie = (await sessionFor(ADMIN_EMAIL)).cookie;
 
   const authHeaders = {
     "Content-Type": "application/json",

@@ -4,6 +4,7 @@ import { createAdapter } from "@socket.io/redis-adapter";
 import IORedis from "ioredis";
 import { v4 as uuidv4 } from "uuid";
 import { verifySessionToken } from "../middlewares/authMiddleware.js";
+import { COOKIE_NAME } from "../services/sessions.js";
 import cookie from "cookie";
 import pool from "../database/db.js";
 import { allowedOrigins } from "../config/origins.js";
@@ -117,21 +118,20 @@ export default async function initSockets(httpServer) {
     console.warn("⚠️  REDIS_URL not set — Socket.IO using in-memory adapter (single-instance only)");
   }
 
-  // Socket auth middleware — reads the httpOnly "token" cookie set by
-  // userController.js and applies the exact same session rule `protect` does
-  // for REST, including the token_version check. Without that check a session
-  // revoked by a password reset or "log out everywhere" kept its socket alive
-  // until the JWT's natural expiry, even though REST already rejected it.
+  // Socket auth middleware — reads the httpOnly session cookie and applies the
+  // exact same session rule `protect` does for REST (live, unrevoked, inside its
+  // idle/absolute limits), so a revoked session can't keep a socket alive.
   io.use(async (socket, next) => {
     try {
       const cookies = cookie.parse(socket.handshake.headers?.cookie || "");
-      const token = cookies.token;
+      const token = cookies[COOKIE_NAME];
 
       if (!token) return next(new Error("Auth token missing"));
 
-      const { user, decoded } = await verifySessionToken(token);
+      const { user, session } = await verifySessionToken(token);
       socket.user = { id: user.id, is_admin: user.is_admin };
-      socket.tokenExpiresAt = decoded.exp * 1000;
+      socket.sessionId = session.id;
+      socket.tokenExpiresAt = session.expiresAt;
       next();
     } catch {
       next(new Error("Authentication failed"));
@@ -141,6 +141,10 @@ export default async function initSockets(httpServer) {
   io.on("connection", (socket) => {
     const userId = socket.user.id;
     console.log(`🔌 Socket connected: ${socket.id} user=${userId}`);
+
+    // Revoking a session (logout / "sign out everywhere" / device list) closes
+    // exactly its sockets by disconnecting this room — see controllers/userController.js.
+    socket.join(`sid:${socket.sessionId}`);
 
     // Reserved synchronously (before the DB await) so concurrent join
     // events — e.g. a burst of join:room calls fired in the same tick —
@@ -266,13 +270,12 @@ export default async function initSockets(httpServer) {
     //   }
     // });
 
-    // A long-lived socket is authorized once, at connect. Drop it when its
-    // token expires so the client reconnects and gets re-validated against
-    // token_version — that reconnect is how a revoked session actually loses
-    // its socket. Bounds staleness by the token lifetime, with no polling.
+    // A long-lived socket is authorized once, at connect. Drop it when the
+    // session's hard cap passes so the client reconnects and is re-validated.
+    // (setTimeout can't exceed 2^31-1 ms; clamp so a long configured cap can't fire at once.)
     const expiryTimer = setTimeout(
       () => socket.disconnect(true),
-      Math.max(socket.tokenExpiresAt - Date.now(), 0)
+      Math.min(Math.max(socket.tokenExpiresAt - Date.now(), 0), 2 ** 31 - 1)
     );
 
     socket.on("disconnect", () => {

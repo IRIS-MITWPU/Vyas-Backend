@@ -63,40 +63,23 @@ function redisStore(prefix) {
   });
 }
 
-// Tighter limit for login — the highest-value brute-force target.
-export const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Too many login attempts. Please try again in 15 minutes." },
-  passOnStoreError: true,
-  store: redisStore("rl:login:"),
-});
-
-// Looser limit for register/forgot-password/reset-password — still
-// unauthenticated and abusable (account spam, reset-email flooding),
-// but lower-frequency legitimate use than login.
-export const authLimiter = rateLimit({
+// Per-IP caps on the OTP endpoints are only a flood shield. Staff share one
+// campus NAT address, so these must be far above what a whole building of
+// teachers signing in produces; the real brute-force protection is per code
+// (5 attempts) and per email (below), not per IP.
+export const otpRequestLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5,
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again in an hour." },
   passOnStoreError: true,
-  store: redisStore("rl:auth:"),
+  store: redisStore("rl:otp-request:"),
 });
 
-// Separate, more generous limit for verify-email/resend-verification.
-// These used to share authLimiter's 5/hour/IP bucket with register/forgot-
-// password/reset-password — a legitimate new user could burn the whole
-// budget with 1 register call + a few mistyped OTP codes, locking
-// themselves out of verification for up to an hour. Split out so entering
-// OTP codes (a normal part of the same signup flow) doesn't compete with
-// the stricter budget meant for account-creation/reset abuse.
 export const otpVerifyLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 20,
+  max: 600,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please try again in an hour." },
@@ -104,8 +87,8 @@ export const otpVerifyLimiter = rateLimit({
   store: redisStore("rl:otp-verify:"),
 });
 
-// Google OAuth entry/callback endpoints — same shape as authLimiter, applied
-// per-IP to both /auth/google and /auth/google/callback.
+// Google OAuth entry/callback endpoints — applied per-IP to both
+// /auth/google and /auth/google/callback.
 export const oauthLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 30,
@@ -117,7 +100,7 @@ export const oauthLimiter = rateLimit({
 });
 
 // Baseline limit applied to every request — an additional layer on top of
-// loginLimiter/authLimiter, which stay in place for their tighter limits.
+// the OTP and OAuth limiters.
 export const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 200,
@@ -128,10 +111,9 @@ export const generalLimiter = rateLimit({
   store: redisStore("rl:general:"),
 });
 
-// Per-email limiter for the OTP endpoints (register/verify-email/resend-verification).
-// authLimiter alone is per-IP, which is trivially bypassed by rotating IPs to
-// hammer one victim email's inbox or brute-force one account's code — this
-// caps attempts against a single email address regardless of source IP.
+// Per-email limiter for code requests. A per-IP limit is trivially bypassed by
+// rotating IPs to hammer one victim's inbox — this caps requests against a
+// single email address regardless of source IP.
 // Redis-backed fixed window keyed by normalized email — same semantics as the
 // old in-memory version, just shared across instances instead of per-process.
 // INCR and the expiry are one Lua script: with a separate PEXPIRE, a failure
@@ -163,19 +145,10 @@ export function perEmailLimiter({ windowMs, max, message, keyPrefix }) {
   };
 }
 
+// Runs for any email, existing or not, so a 429 reveals nothing about accounts.
 export const otpEmailLimiter = perEmailLimiter({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 5,
   message: "Too many requests for this email address. Please try again in an hour.",
   keyPrefix: "rl:otp-email",
-});
-
-// forgot-password, per email (audit F8): authLimiter alone is per-IP, so
-// rotating IPs could flood one inbox with reset emails. Runs for any email,
-// registered or not, so a 429 reveals nothing about account existence.
-export const resetEmailLimiter = perEmailLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3,
-  message: "Too many password reset requests for this email address. Please try again in an hour.",
-  keyPrefix: "rl:reset-email",
 });

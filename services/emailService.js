@@ -25,51 +25,45 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-export async function sendPasswordResetEmail(to, resetUrl) {
-  await transporter.sendMail({
-    from: process.env.SMTP_FROM,
-    to,
-    subject: "Vyas — Password Reset",
-    text: [
-      "You requested a password reset for your Vyas Room Booking account.",
-      "",
-      `Reset link (valid for 1 hour): ${resetUrl}`,
-      "",
-      "If you did not request this, you can safely ignore this email.",
-    ].join("\n"),
-    html: `
-      <p>You requested a password reset for your <strong>Vyas Room Booking</strong> account.</p>
-      <p><a href="${resetUrl}">Click here to reset your password</a> (valid for 1 hour)</p>
-      <p style="color:#888;font-size:12px;">If you did not request this, ignore this email.</p>
-    `,
+// Sign-in ("login") and step-up ("reauth") codes. The code is never put in the
+// subject line and never logged.
+export async function sendLoginCodeEmail(to, fullName, code, expiresInMinutes, purpose = "login", requestedAt = Date.now()) {
+  const isReauth = purpose === "reauth";
+  const action = isReauth ? "confirm a sensitive action in" : "sign in to";
+  const greeting = fullName ? `Hi ${fullName},` : "Hi,";
+  const when = new Date(requestedAt).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    dateStyle: "medium",
+    timeStyle: "short",
   });
-}
 
-export async function sendVerificationEmail(to, fullName, code, expiresInMinutes) {
   const info = await transporter.sendMail({
     from: process.env.SMTP_FROM,
     to,
-    subject: "Vyas — Verify your email",
+    subject: isReauth ? "Vyas — confirm it's you" : "Vyas — your sign-in code",
     text: [
-      `Hi ${fullName},`,
+      greeting,
       "",
-      "Use the code below to verify your email address and finish creating your Vyas Room Booking account.",
+      `Use this code to ${action} Vyas Room Booking:`,
       "",
-      `Verification code: ${code}`,
-      `This code expires in ${expiresInMinutes} minutes.`,
+      `    ${code}`,
       "",
-      "If you did not request this, you can safely ignore this email.",
+      `It expires in ${expiresInMinutes} minutes and works once. Requested ${when} IST.`,
+      "",
+      "Never share this code with anyone. Vyas staff will never ask for it.",
+      "If you did not request it, ignore this email — someone may have typed your address by mistake.",
     ].join("\n"),
     html: `
-      <p>Hi ${escapeHtml(fullName)},</p>
-      <p>Use the code below to verify your email address and finish creating your <strong>Vyas Room Booking</strong> account.</p>
-      <p style="font-size:28px;font-weight:bold;letter-spacing:6px;">${escapeHtml(code)}</p>
-      <p>This code expires in ${expiresInMinutes} minutes.</p>
-      <p style="color:#888;font-size:12px;">If you did not request this, you can safely ignore this email.</p>
+      <p>${escapeHtml(greeting)}</p>
+      <p>Use this code to ${action} <strong>Vyas Room Booking</strong>:</p>
+      <p style="font-size:30px;font-weight:bold;letter-spacing:6px;">${escapeHtml(code)}</p>
+      <p>It expires in ${expiresInMinutes} minutes and works once. Requested ${escapeHtml(when)} IST.</p>
+      <p><strong>Never share this code with anyone.</strong> Vyas staff will never ask for it.</p>
+      <p style="color:#888;font-size:12px;">If you did not request it, ignore this email — someone may have typed your address by mistake.</p>
     `,
   });
 
-  console.log(`✅ Verification email sent to ${to}`);
+  console.log(`✅ Sign-in code email sent to ${to}`);
   console.log("📨 Message ID:", info.messageId);
 }
 
