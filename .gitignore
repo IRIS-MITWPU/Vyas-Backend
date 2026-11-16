@@ -13,3 +13,17 @@ docker-stuff-summary.md
 BEFORE_DEP.md
 To_Do.md
 strix_runs/
+
+# Timetable Planner: real-data inputs derived from private workbooks (faculty names, divisions, offerings...).
+# Never commit these. Tests that need them skip themselves when they are absent.
+tests/planner/fixtures/real/*
+!tests/planner/fixtures/real/check_real_inputs.mjs
+!tests/planner/fixtures/real/fetch_rooms.mjs
+tests/planner/real/real_run_*
+tests/planner/real/out/
+
+# Source workbooks / staff lists, anywhere
+*.xlsx
+*.xls
+Faculty_Data/
+TimeTable_Data/
