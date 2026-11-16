@@ -1,0 +1,30 @@
+// Lets `node --test tests/planner/unit` work on Node 22 (a directory argument is run as a module here,
+// so this entry loads every unit test file). The glob form `node --test "tests/planner/unit/*.test.js"` works too.
+import './termDefaults.test.js';
+import './ruleDefaults.test.js';
+import './sessionSync.test.js';
+import './readiness.test.js';
+import './importSpec.test.js';
+import './placement.test.js';
+import './occupancy.test.js';
+import './roomPick.test.js';
+import './explain.test.js';
+import './roomShare.test.js';
+import './engine_model.test.js';
+import './engine_rank.test.js';
+import './engine_rotation.test.js';
+import './engine_config.test.js';
+import './engine_generate.test.js';
+import './engine_repair.test.js';
+import './engine_suggest.test.js';
+import './engine_parity.test.js';
+import './engine_perf.test.js';
+import './ruleSpec.test.js';
+import './rule_placement.test.js';
+import './rule_clashes.test.js';
+import './rule_rooms.test.js';
+import './rule_labs.test.js';
+import './rule_faculty.test.js';
+import './rule_division.test.js';
+import './rule_layout.test.js';
+import './evaluate.test.js';

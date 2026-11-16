@@ -1,0 +1,9 @@
+code,name,kind,weekly_count,semester_total,allow_second_lab,duration_min
+DS,Data Structures,theory,4,60,no,60
+OS,Operating Systems,theory,3,45,no,60
+Maths,Engineering Mathematics,theory,4,60,no,60
+CN,Computer Networks,theory,3,45,no,60
+DBMS,Database Management Systems,theory,3,45,no,60
+TC,Technical Communication,theory,2,30,no,60
+DS Lab,Data Structures Lab,lab,1,15,no,120
+DBMS Lab,DBMS Lab,lab,1,15,no,120
