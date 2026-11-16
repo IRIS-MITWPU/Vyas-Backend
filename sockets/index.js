@@ -201,6 +201,75 @@ export default async function initSockets(httpServer) {
       }
     });
 
+    // Timetable planner live sync (admin only). Joins count against the same per-socket cap as join:room.
+    // A join reserves its slot synchronously on arrival (before any await). The rest of a join / leave then runs
+    // through a per-channel queue, so the events of one channel apply in the order they arrived: a leave sent after
+    // a join still in flight leaves once that join completed, and the reservation always matches membership.
+    // A leave only releases the reservation when the socket really is in the room, so it can never drop the
+    // reservation of a join that is still waiting in the queue. Never throws; always answers through the ack.
+    const plannerQueues = new Map();
+    const plannerEnqueue = (channel, job) => {
+      const next = (plannerQueues.get(channel) ?? Promise.resolve()).then(job, job);
+      plannerQueues.set(channel, next);
+      next.finally(() => { if (plannerQueues.get(channel) === next) plannerQueues.delete(channel); }).catch(() => {});
+    };
+    const releaseIfNotJoined = (channel) => {
+      if (!socket.rooms.has(channel)) reservedChannels.delete(channel);
+    };
+
+    socket.on("join:planner", (payload, cb) => {
+      const ack = typeof cb === "function" ? cb : () => {};
+      const safeAck = (res) => { try { ack(res); } catch { /* ignore */ } };
+      if (!socket.user?.is_admin || process.env.PLANNER_ENABLED !== "true") return safeAck({ ok: false, error: "Not allowed" });
+      const versionId = payload?.version_id;
+      if (typeof versionId !== "string" || !UUID_RE.test(versionId)) return safeAck({ ok: false, error: "Invalid version id" });
+      const channel = `planner:version:${versionId}`;
+      if (!reservedChannels.has(channel)) {
+        if (reservedChannels.size >= MAX_JOINS_PER_SOCKET) return safeAck({ ok: false, error: "Too many joined rooms" });
+        reservedChannels.add(channel);
+      }
+      plannerEnqueue(channel, async () => {
+        try {
+          const result = await pool.query("SELECT 1 FROM planner_versions WHERE id = $1", [versionId]);
+          if (!result.rows.length) {
+            releaseIfNotJoined(channel);
+            return safeAck({ ok: false, error: "Version not found" });
+          }
+          // an earlier leave in the queue may have released the reservation: take it again (cap permitting)
+          if (!reservedChannels.has(channel)) {
+            if (reservedChannels.size >= MAX_JOINS_PER_SOCKET) return safeAck({ ok: false, error: "Too many joined rooms" });
+            reservedChannels.add(channel);
+          }
+          await socket.join(channel);
+          safeAck({ ok: true });
+        } catch (err) {
+          releaseIfNotJoined(channel);
+          console.error("join:planner error", err);
+          safeAck({ ok: false, error: "Could not join" });
+        }
+      });
+    });
+
+    socket.on("leave:planner", (payload, cb) => {
+      const ack = typeof cb === "function" ? cb : () => {};
+      const safeAck = (res) => { try { ack(res); } catch { /* ignore */ } };
+      const versionId = payload?.version_id;
+      if (typeof versionId !== "string" || !UUID_RE.test(versionId)) return safeAck({ ok: false, error: "Invalid version id" });
+      const channel = `planner:version:${versionId}`;
+      plannerEnqueue(channel, async () => {
+        try {
+          if (socket.rooms.has(channel)) {
+            await socket.leave(channel);
+            reservedChannels.delete(channel);
+          }
+          safeAck({ ok: true });
+        } catch (err) {
+          console.error("leave:planner error", err);
+          safeAck({ ok: false, error: "Could not leave" });
+        }
+      });
+    });
+
     // // ==========================
     // // LOCK REQUEST
     // // ==========================

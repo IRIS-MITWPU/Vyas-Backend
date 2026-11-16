@@ -108,7 +108,20 @@ export const generalLimiter = rateLimit({
   legacyHeaders: false,
   message: { success: false, message: "Too many requests, please try again later." },
   passOnStoreError: true,
+  // /planner is covered by plannerLimiter below (its editor makes many small requests)
+  skip: (req) => /^\/planner(?:[/?]|$)/.test(req.originalUrl),
   store: redisStore("rl:general:"),
+});
+
+// Timetable planner: mounted in routes/planner/index.js after the feature-flag gate and before auth.
+export const plannerLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 3000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many requests, please try again later." },
+  passOnStoreError: true,
+  store: redisStore("rl:planner:"),
 });
 
 // Per-email limiter for code requests. A per-IP limit is trivially bypassed by

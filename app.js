@@ -52,6 +52,7 @@ const { default: oauthRoutes }           = await import("./routes/oauth.js");
 const { default: bookingRoutes }         = await import("./routes/booking.js");
 const { default: timetableRoutes }       = await import("./routes/timetable.js");
 const { default: timetableImportRoutes } = await import("./routes/timetable-import.js");
+const { default: plannerRoutes }         = await import("./routes/planner/index.js");
 const { default: initSockets }           = await import("./sockets/index.js");
 const { default: pool }                  = await import("./database/db.js");
 
@@ -102,6 +103,15 @@ if (process.env.NODE_ENV === "production") {
 // (a different origin/port), so it needs "cross-origin" instead.
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(morgan("combined"));
+// /planner has its own JSON parsers, ahead of the flag gate, rate limiter and auth (nothing has been checked yet):
+// 2 MB ONLY for the import routes (CSV/XLSX are parsed in the browser and posted as rows), 100 KB for every other
+// planner route. body-parser skips a body that is already parsed, so these must stay BEFORE the global parser
+// below. An oversized body is a body-parser error with status 413, answered by the global error handler.
+const PLANNER_IMPORT_PATH = /^\/terms\/[^/]+\/import\/[^/]+\/?$/; // req.path is relative to the /planner mount
+const plannerImportJson = express.json({ limit: "2mb" });
+const plannerJson = express.json({ limit: "100kb" });
+app.use("/planner", (req, res, next) =>
+  (req.method === "POST" && PLANNER_IMPORT_PATH.test(req.path) ? plannerImportJson : plannerJson)(req, res, next));
 app.use(express.json());
 app.use(cookieParser());
 app.use(passport.initialize()); // no passport.session() — our own DB-backed session cookie only, session:false everywhere
@@ -155,6 +165,7 @@ app.use("/auth", oauthRoutes);
 app.use("/booking", bookingRoutes);
 app.use("/", timetableRoutes);        // /room/:id/timetable + /timetable/:id
 app.use("/timetable-import", timetableImportRoutes);
+app.use("/planner", plannerRoutes);   // Timetable Planner; 404s unless PLANNER_ENABLED=true (checked per request)
 
 // ============================================================
 // 404 handler
@@ -186,6 +197,7 @@ let importWorker;
 
 httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  if (process.env.PLANNER_ENABLED === "true") import("./services/planner/generation.js").then((g) => { g.sweepStaleRuns(); setInterval(() => g.sweepStaleRuns(), 60000).unref(); }).catch((err) => console.error("[Planner] stale-run sweep skipped:", err.message));
   if (!RUN_WORKERS) return console.log("Background workers disabled (RUN_WORKERS=false) — run worker.js");
   Promise.all([
     import("./workers/emailWorker.js"),

@@ -13,7 +13,8 @@
     "test:reset": "node scripts/flush-rate-limits.mjs",
     "create-admin": "node scripts/create-admin.mjs",
     "import-allowed-users": "node scripts/import-allowed-users.mjs",
-    "test:nginx": "node --test tests/nginx-conf.test.js"
+    "test:nginx": "node --test tests/nginx-conf.test.js",
+    "test:planner": "node --test \"tests/planner/unit/*.test.js\" \"tests/planner/sql/*.test.js\" \"tests/planner/api/*.test.js\""
   },
   "keywords": [],
   "author": "",
@@ -54,5 +55,8 @@
     "uuid": "^13.0.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "socket.io-client": "4.8.1"
   }
 }
