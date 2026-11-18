@@ -50,3 +50,9 @@ export const runNotFound = () => new PlannerError(404, "RUN_NOT_FOUND", "Generat
 export const runNotActive = () => new PlannerError(409, "RUN_NOT_ACTIVE", "This generation has already finished");
 export const confirmRequired = () =>
   new PlannerError(422, "CONFIRM_REQUIRED", "Regenerating replaces every unlocked placed session. Send confirm: true to continue.");
+
+// ---- contract 10 (term building, home classrooms) ----
+export const roomWrongBuilding = (message, details) => new PlannerError(422, "ROOM_WRONG_BUILDING", message, details);
+export const buildingChangeNeedsConfirm = (details) =>
+  new PlannerError(409, "BUILDING_CHANGE_NEEDS_CONFIRM",
+    "Rooms and placed sessions outside the new building will be removed. Send confirm_unplace: true to continue.", details);

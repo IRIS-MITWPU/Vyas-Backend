@@ -13,10 +13,10 @@ test('severities', () => {
   for (const k of ['faculty_clash', 'room_clash', 'batch_clash', 'working_hours', 'break_overlap', 'grid', 'duration']) {
     assert.equal(byKey[k].severity, 'blocking', k);
   }
-  for (const k of ['room_type', 'room_capacity', 'all_placed', 'lab_per_day', 'lab_weekly']) {
+  for (const k of ['room_type', 'room_capacity', 'all_placed', 'lab_per_day', 'lab_weekly', 'student_idle_gap']) {
     assert.equal(byKey[k].severity, 'hard', k);
   }
-  for (const k of ['faculty_daily_load', 'faculty_consecutive', 'faculty_idle_gap', 'student_consecutive', 'subject_spread', 'room_change', 'day_balance', 'division_daily_hours', 'time_of_day', 'faculty_weekly_load', 'student_idle_gap']) {
+  for (const k of ['faculty_daily_load', 'faculty_consecutive', 'faculty_idle_gap', 'student_consecutive', 'subject_spread', 'room_change', 'day_balance', 'division_daily_hours', 'time_of_day', 'faculty_weekly_load']) {
     assert.equal(byKey[k].severity, 'soft', k);
   }
 });
@@ -33,7 +33,8 @@ test('params', () => {
   assert.deepEqual(byKey.division_daily_hours.params, { max_hours: 6 });
   assert.deepEqual(byKey.time_of_day.params, { core_start: 645, core_end: 930, late_start: 945 });
   assert.deepEqual(byKey.faculty_weekly_load.params, {});
-  assert.deepEqual(byKey.student_idle_gap.params, { max_gap_minutes: 60 });
+  assert.deepEqual(byKey.student_idle_gap.params, { max_gap_minutes: 0 });
+  assert.equal(byKey.student_idle_gap.severity, 'hard', "no idle time between a division's lectures is a hard rule by default");
   assert.deepEqual(byKey.grid.params, {});
 });
 

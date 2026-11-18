@@ -10,13 +10,13 @@
 // the harness' private room logic and the domain one (all irrelevant for real data, documented here on purpose):
 //   * text compare: the domain uses the default locale, the harness 'en' (same order for ASCII names);
 //   * capacity: the domain treats any finite number as "known" for classrooms, the harness only positive integers;
-//   * theory home room: the domain does not check `!home.is_lab` (a division's home room is a classroom anyway);
+//   * theory home rooms (contract 10.3): a division WITH home classrooms uses only those (the harness only prefers its single home room);
 //   * the shared-lab peak load now comes from domain/roomShare.js peakLoad (identical sweep: ends before starts at the same minute);
 //   * the `sharedLabs=false` switch of the harness (pre-8.7 servers) is gone: lab sharing is always on (contract 8.7).
 // Placement validity stays on engine/time.js validPlacement (hot loop); the domain checkPlacement is used for a final
 // validation pass over the generated plan (generate.js).
 import { termShape, validPlacement, cmpText } from './time.js';
-import { pickRoom as domainPickRoom, isShareable as domainIsShareable, peakLoad } from '../domain/index.js';
+import { pickRoom as domainPickRoom, isShareable as domainIsShareable, peakLoad, allHomeRoomIds, violatesHomeRooms } from '../domain/index.js';
 
 const isCap = (c) => typeof c === 'number' && Number.isInteger(c) && c > 0;
 const ov = (s1, e1, s2, e2) => s1 < e2 && e1 > s2;
@@ -99,6 +99,7 @@ export class OccupancyModel {
       this.rooms.set(id, { room_id: id, is_lab: !!r.is_lab, capacity: Number.isFinite(r.capacity) ? r.capacity : null, name: r.name, building_name: r.building_name ?? '' });
     }
     this.roomList = [...this.rooms.values()];
+    this.reservedRooms = allHomeRoomIds(this.divisions); // every division's home rooms (the fallback pick avoids them)
     this.faculty = new Map((snapshot.faculty || []).map((f) => [f.id, f]));
     this.placed = new Map(); // sid -> {day, start, end, room_id, shared}
     this.facOcc = new Map(); // faculty id -> Map(sid -> {day,start,end})
@@ -238,6 +239,7 @@ export class OccupancyModel {
       batch: i.batch,
       poolRooms: this.roomList,
       roomLoads: loads,
+      reservedRoomIds: this.reservedRooms,
     });
     if (!r.room_id) return r;
     const shared = this.isShareable(sid, r.room_id);
@@ -248,6 +250,8 @@ export class OccupancyModel {
   checkRoom(sid, roomId, day, start, end) {
     const r = this.rooms.get(roomId);
     if (!r) return { ok: false, reason: 'ROOM_NOT_IN_POOL' };
+    const info = this.info.get(sid);
+    if (violatesHomeRooms({ subject: { kind: info.kind }, division: this.divisions.get(info.division_id), room_id: roomId })) return { ok: false, reason: 'ROOM_NOT_HOME' };
     const load = this.roomLoad(roomId, day, start, end, sid);
     const shared = this.isShareable(sid, roomId);
     if (shared) {

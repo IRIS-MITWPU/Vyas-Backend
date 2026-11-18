@@ -49,15 +49,32 @@ test('home room with unknown capacity is accepted', () => {
   assert.deepEqual(pick({ poolRooms, division: { ...division, home_room_id: 'home' } }), { room_id: 'home' });
 });
 
-test('home room is skipped when busy, too small, or outside the pool', () => {
+test('a division WITH home classrooms uses only those: busy / too small / outside the pool -> no room (contract 10.3)', () => {
   const poolRooms = [room('home', { capacity: 120 }), room('other', { capacity: 80 })];
   const d = { ...division, home_room_id: 'home' };
-  assert.deepEqual(pick({ poolRooms, division: d, busyRoomIds: new Set(['home']) }), { room_id: 'other' });
-  assert.deepEqual(
-    pick({ poolRooms: [room('home', { capacity: 30 }), room('other', { capacity: 80 })], division: d }),
-    { room_id: 'other' },
-  );
-  assert.deepEqual(pick({ poolRooms: [room('other', { capacity: 80 })], division: d }), { room_id: 'other' });
+  assert.deepEqual(pick({ poolRooms, division: d }), { room_id: 'home' });
+  assert.match(pick({ poolRooms, division: d, busyRoomIds: new Set(['home']) }).reason, /classroom is already in use/);
+  assert.equal(pick({ poolRooms: [room('home', { capacity: 30 }), room('other', { capacity: 80 })], division: d }).room_id, null);
+  assert.match(pick({ poolRooms: [room('other', { capacity: 80 })], division: d }).reason, /none of them is a classroom in this term's room pool/);
+  // a home room the pool marks as a lab is not usable for theory
+  assert.equal(pick({ poolRooms: [room('home', { is_lab: true, capacity: 120 }), room('other', { capacity: 80 })], division: d }).room_id, null);
+});
+
+test('two home classrooms: the first free one in the admin order; the current room only if it is one of them', () => {
+  const poolRooms = [room('a', { capacity: 120 }), room('b', { capacity: 120 }), room('z', { capacity: 70 })];
+  const d = { ...division, home_room_ids: ['b', 'a'] };
+  assert.deepEqual(pick({ poolRooms, division: d }), { room_id: 'b' });
+  assert.deepEqual(pick({ poolRooms, division: d, busyRoomIds: new Set(['b']) }), { room_id: 'a' });
+  assert.equal(pick({ poolRooms, division: d, busyRoomIds: new Set(['a', 'b']) }).room_id, null);
+  assert.deepEqual(pick({ poolRooms, division: d, currentRoomId: 'z' }), { room_id: 'b' }, 'a current room outside the home rooms is not kept');
+  assert.deepEqual(pick({ poolRooms, division: d, currentRoomId: 'a' }), { room_id: 'a' });
+});
+
+test('a division without home classrooms prefers classrooms that are no division home room', () => {
+  const poolRooms = [room('small', { capacity: 65 }), room('big', { capacity: 120 })];
+  assert.deepEqual(pick({ poolRooms }), { room_id: 'small' });
+  assert.deepEqual(pick({ poolRooms, reservedRoomIds: new Set(['small']) }), { room_id: 'big' });
+  assert.deepEqual(pick({ poolRooms: [poolRooms[0]], reservedRoomIds: new Set(['small']) }), { room_id: 'small' }, 'still usable when it is the only one');
 });
 
 test('labs ignore the home room', () => {
@@ -241,7 +258,7 @@ test('roomLoads: theory treats any shared load as busy (and never shares)', () =
   const poolRooms = [room('a', { capacity: 70 }), room('b', { capacity: 80 })];
   assert.deepEqual(pick({ poolRooms, roomLoads: loads({ a: L(5) }) }), { room_id: 'b' });
   assert.deepEqual(pick({ poolRooms, roomLoads: loads({ a: L(0, false, { shared: true }) }) }), { room_id: 'b' });
-  assert.deepEqual(pick({ poolRooms, division: { ...division, home_room_id: 'a' }, roomLoads: loads({ a: L(1) }) }), { room_id: 'b' }, 'home room skipped when shared');
+  assert.equal(pick({ poolRooms, division: { ...division, home_room_id: 'a' }, roomLoads: loads({ a: L(1) }) }).room_id, null, 'a restricted division never falls through to another room');
   const all = pick({ poolRooms, roomLoads: loads({ a: L(0, true), b: L(2) }) });
   assert.equal(all.reason, 'All 2 classrooms are already in use at that time.');
 });

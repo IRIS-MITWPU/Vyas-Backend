@@ -41,7 +41,7 @@ const smallWorld = () =>
 function full() {
   const w = smallWorld();
   const snap = applyResult(w, generate({ snapshot: w, seed: 1 }));
-  return { w, snap, model: buildModel(snap), config: buildEngineConfig([]) };
+  return { w, snap, model: buildModel(snap), config: buildEngineConfig([{ rule_key: 'student_idle_gap', enabled: true, severity: 'soft', weight: 1, params: { max_gap_minutes: 60 } }]) }; // predates the hard no-idle-time default
 }
 
 /** Applies a candidate/op to a copy of the snapshot and returns the independent verdict. */

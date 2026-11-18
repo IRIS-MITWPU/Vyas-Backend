@@ -79,10 +79,29 @@ test('model: classrooms are exclusive; the home room goes first, then the smalle
   // same slot as an occupied home room, different teacher: use X TH2 (teacher B) vs Y... both divisions' home is C1
   const th2 = sessionOf(w, 'X', 'TH2', 'ALL', 1);
   const e2 = m.evaluate(th2.id, MON, 570);
-  assert.equal(e2.ok, true);
-  assert.equal(e2.room_id, roomId(w, 'C2'), 'home room busy -> smallest free classroom (name order)');
-  m.place(th2.id, MON, 570, e2.end, e2.room_id, false);
+  // contract 10.3: X has a home classroom, so its theory never goes anywhere else: busy home room -> no room
+  assert.deepEqual([e2.ok, e2.why], [false, 'room']);
+  assert.match(e2.detail, /classroom/);
   void y2;
+});
+
+test('model: a division WITHOUT home classrooms takes the smallest free classroom, preferring rooms that are no division home', () => {
+  const w = mini({
+    rooms: [{ name: 'C1', cap: 60 }, { name: 'C2', cap: 70 }, { name: 'C3', cap: 90 }],
+    faculty: ['A', 'B'],
+    subjects: [{ code: 'T1', kind: 'theory', weekly: 1 }],
+    divisions: [{ name: 'H', students: 60, home: 'C1' }, { name: 'F', students: 60 }],
+    offerings: [{ div: 'H', code: 'T1', faculty: 'A' }, { div: 'F', code: 'T1', faculty: 'B' }],
+  });
+  const m = new OccupancyModel(w);
+  const f = sessionOf(w, 'F', 'T1');
+  // C1 (smallest) is H's home room: F skips it and takes C2
+  assert.equal(m.evaluate(f.id, MON, 510).room_id, roomId(w, 'C2'));
+  // H itself only ever gets C1
+  const h = sessionOf(w, 'H', 'T1');
+  assert.equal(m.evaluate(h.id, MON, 510).room_id, roomId(w, 'C1'));
+  // an explicit other room for H is refused with ROOM_NOT_HOME
+  assert.deepEqual([m.evaluate(h.id, MON, 510, { room_id: roomId(w, 'C2') }).ok, m.evaluate(h.id, MON, 510, { room_id: roomId(w, 'C2') }).detail], [false, 'ROOM_NOT_HOME']);
 });
 
 test('model: no room left -> evaluate says room', () => {

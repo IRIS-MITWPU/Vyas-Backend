@@ -1,13 +1,15 @@
 /**
  * Placement rule (contract 8.1.2). Pure, no I/O, never throws.
  *
- * checkPlacement({term, subject, weekday, start_min, room_id?, poolRoomIds?})
+ * checkPlacement({term, subject, weekday, start_min, room_id?, poolRoomIds?, division?})
  *   -> {ok:true, end_min} | {ok:false, reason, message}
- * reason: NOT_WORKING_DAY | OFF_GRID | OUTSIDE_HOURS | OVERLAPS_BREAK | ROOM_NOT_IN_POOL
+ * reason: NOT_WORKING_DAY | OFF_GRID | OUTSIDE_HOURS | OVERLAPS_BREAK | ROOM_NOT_IN_POOL | ROOM_NOT_HOME
+ * ROOM_NOT_HOME (contract 10.3): `division` is given, has home classrooms and a THEORY session is placed in another room.
  * (checked in that order).
  */
 import { DEFAULT_TERM_SETTINGS, workingDays } from './termDefaults.js';
 import { fmtTime, fmtRange, weekdayName } from './explain.js';
+import { violatesHomeRooms } from './homeRooms.js';
 
 /** The hard-wired SQL grid (planner_sessions.start_min % 15 = 0). */
 const SQL_GRID = 15;
@@ -83,7 +85,7 @@ function fail(reason, message) {
 }
 
 export function checkPlacement(input) {
-  const { term, subject, weekday, start_min, room_id, poolRoomIds } = input || {};
+  const { term, subject, weekday, start_min, room_id, poolRoomIds, division } = input || {};
 
   // 1. Working day
   const days = workingDays(term);
@@ -133,6 +135,11 @@ export function checkPlacement(input) {
     if (!pool.has(room_id)) {
       return fail('ROOM_NOT_IN_POOL', "That room is not in this term's room pool.");
     }
+  }
+
+  // 6. Home classrooms (theory only)
+  if (violatesHomeRooms({ subject, division, room_id })) {
+    return fail('ROOM_NOT_HOME', `${division.name ? `Division ${division.name}` : 'This division'} only uses its own classrooms for theory. Pick one of them.`);
   }
 
   return { ok: true, end_min };

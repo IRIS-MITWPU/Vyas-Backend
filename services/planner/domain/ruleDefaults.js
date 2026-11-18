@@ -35,7 +35,8 @@ export const DEFAULT_RULES = Object.freeze(
     r('division_daily_hours', 'soft', { max_hours: 6 }),
     r('time_of_day', 'soft', { core_start: 645, core_end: 930, late_start: 945 }),
     r('faculty_weekly_load', 'soft'),
-    r('student_idle_gap', 'soft', { max_gap_minutes: 60 }),
+    // No free time between a division's lectures of a day (breaks excluded): hard, 0 minutes (contract 10.1). The admin can loosen it.
+    r('student_idle_gap', 'hard', { max_gap_minutes: 0 }),
   ].map((rule) => Object.freeze({ ...rule, params: Object.freeze({ ...rule.params }) })),
 );
 

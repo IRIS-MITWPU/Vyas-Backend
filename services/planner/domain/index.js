@@ -8,6 +8,7 @@ export * from './limits.js';
 export * from './placement.js';
 export * from './occupancy.js';
 export * from './roomPick.js';
+export * from './homeRooms.js';
 export * from './explain.js';
 export * from './roomShare.js';
 export * from './ruleSpec.js';

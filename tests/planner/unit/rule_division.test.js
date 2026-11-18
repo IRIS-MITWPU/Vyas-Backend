@@ -42,16 +42,24 @@ test('student_consecutive: parallel batch labs count once (union of the batches)
 });
 
 test('student_idle_gap: free time between first and last session of a day, breaks excluded', () => {
+  const P = { params: { max_gap_minutes: 60 } };
   const ok = loaded([T.s0830, T.s1045]); // 09:30..10:45 = 75 min minus the 15 min break = 60: allowed
-  assert.deepEqual(run('student_idle_gap', ok), []);
+  assert.deepEqual(run('student_idle_gap', ok, P), []);
   const bad = loaded([T.s0830, T.s1145]); // 09:30..11:45 = 135 - 15 = 120 min
-  const issues = run('student_idle_gap', bad);
+  const issues = run('student_idle_gap', bad, P);
   assert.equal(issues.length, 1, msgs(issues).join('\n'));
   assert.match(issues[0].message, /CSE-A \(Sem 3\) has 2 h of free time between its first and last session on Monday \(09:30–11:45\); the limit is 1 h\./);
   assert.deepEqual(run('student_idle_gap', bad, { params: { max_gap_minutes: 120 } }), []);
   // a single session, or no free time, has no idle time
-  assert.deepEqual(run('student_idle_gap', loaded([T.s0830])), []);
-  assert.deepEqual(run('student_idle_gap', loaded([T.s0830, T.s0930, T.s1045])), []);
+  assert.deepEqual(run('student_idle_gap', loaded([T.s0830]), P), []);
+  assert.deepEqual(run('student_idle_gap', loaded([T.s0830, T.s0930, T.s1045]), P), []);
+});
+
+test('student_idle_gap: the default is hard with a 0 minute limit, so even the 60 minute gap is an issue', () => {
+  const issues = run('student_idle_gap', loaded([T.s0830, T.s1045]));
+  assert.equal(issues.length, 1, msgs(issues).join('\n'));
+  assert.equal(issues[0].severity, 'hard');
+  assert.deepEqual(run('student_idle_gap', loaded([T.s0830, T.s0930, T.s1045])), [], 'no free time (only the break) is fine');
 });
 
 test('division_daily_hours: teaching hours above max_hours on one day', () => {

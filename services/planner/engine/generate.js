@@ -92,7 +92,7 @@ export function generate({ snapshot, rules, mode = 'fill_unplaced', divisionIds 
   // ---- result of the best seed ----------------------------------------------------------------
   const { model } = best;
   const poolRoomIds = new Set((snapshot.rooms || []).map((r) => r.room_id ?? r.id));
-  const subjectOf = (i) => ({ duration_min: i.duration });
+  const subjectOf = (i) => ({ duration_min: i.duration, kind: i.kind });
   const units = [];
   const dropped = new Map(); // sid -> reason text: the unit's placement failed the final domain check (never throws the whole run)
   for (const u of best.units) {
@@ -101,7 +101,7 @@ export function generate({ snapshot, rules, mode = 'fill_unplaced', divisionIds 
     let bad = null;
     for (const sid of u.sids) {
       const p = model.placed.get(sid);
-      const chk = placementCheck({ term: snapshot.term, subject: subjectOf(model.info.get(sid)), weekday: p.day, start_min: p.start, room_id: p.room_id, poolRoomIds });
+      const chk = placementCheck({ term: snapshot.term, subject: subjectOf(model.info.get(sid)), weekday: p.day, start_min: p.start, room_id: p.room_id, poolRoomIds, division: model.divisions.get(model.info.get(sid).division_id) });
       if (!chk.ok || chk.end_min !== p.end) {
         bad = chk.message || `the placement is not valid (${chk.reason ?? 'END_MISMATCH'})`;
         break;

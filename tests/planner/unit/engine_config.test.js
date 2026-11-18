@@ -14,7 +14,7 @@ test('config: DEFAULT_RULES, an empty list and null all give the default config'
   assert.equal(d.weights.runFaculty, 10);
   assert.equal(d.defaults.facultyDefaultMaxHours, 6);
   assert.deepEqual(d.hard, {
-    labPerDayMax: 1, subjectPerDayMax: 1, facultyRunHours: null, divisionRunHours: null, divisionDayHours: null, facultyDayHours: null, divisionIdleGapMinutes: null, theoryCoreWindow: null,
+    labPerDayMax: 1, subjectPerDayMax: 1, facultyRunHours: null, divisionRunHours: null, divisionDayHours: null, facultyDayHours: null, divisionIdleGapMinutes: 0, theoryCoreWindow: null,
   });
 });
 
@@ -178,4 +178,23 @@ test('rank+config: division_daily_hours hard filters the relaxed pass too; lab_p
   assert.ok(labBlockCandidates(lm, b2, { config: buildEngineConfig([]), strict: false }).every((c) => c.day !== 0));
   assert.ok(labBlockCandidates(lm, b2, { config: buildEngineConfig([rule('lab_per_day', { severity: 'hard', params: { max: 2 } })]), strict: false }).some((c) => c.day === 0 && c.start !== 645));
   void placeIn; void roomId;
+});
+
+test('rank+config: the default no-idle-time rule only admits slots that touch the division day; soft or limit > 0 admits gaps', () => {
+  const w = world();
+  const m = new OccupancyModel(w);
+  put(m, w, 'X', 'T1', 1, 0, 510); // Monday 08:30-09:30
+  const t2 = sessionOf(w, 'X', 'T2').id;
+  const starts = (cfg) => theoryCandidates(m, t2, { config: cfg, strict: false }).filter((c) => c.day === 0).map((c) => c.start);
+  const hard = starts(buildEngineConfig([]));
+  assert.ok(hard.includes(570), 'right after the first lecture is gap-free');
+  assert.ok(!hard.includes(945), 'a 15:45 start would leave idle time -> not a candidate');
+  assert.ok(hard.every((s) => s <= 570 + 15 || s === 645 || s === 630 || s < 570), 'only slots touching 09:30 (or the break that follows it)');
+  const soft = starts(buildEngineConfig([rule('student_idle_gap', { severity: 'soft', params: { max_gap_minutes: 60 } })]));
+  assert.ok(soft.includes(945), 'soft: the same slot is only penalised');
+  const loose = starts(buildEngineConfig([rule('student_idle_gap', { severity: 'hard', params: { max_gap_minutes: 240 } })]));
+  assert.ok(loose.includes(780) || loose.includes(810) || loose.includes(945), 'a limit above 0 admits some idle time');
+  // an empty day: the first lecture may start anywhere (the day need not begin at 08:30)
+  const t3 = sessionOf(w, 'X', 'T3').id;
+  assert.ok(theoryCandidates(m, t3, { config: buildEngineConfig([]), strict: false }).some((c) => c.day === 1 && c.start === 945));
 });

@@ -38,13 +38,16 @@ const SPEC_LIST = [
   entry('grid', 'blocking', 'Time grid', "Sessions must start on the term's time grid."),
   entry('duration', 'blocking', 'Session duration', "A session must last as long as its subject's duration."),
   // ---- hard
-  entry('room_type', 'hard', 'Room type', 'Labs need a lab room; theory sessions should not use a lab room.'),
+  entry('room_type', 'hard', 'Room type', "Labs need a lab room; theory sessions use a classroom, and only the division's own home classrooms when it has any."),
   entry('room_capacity', 'hard', 'Room capacity', 'The room must be big enough for the batch or division.'),
   entry('all_placed', 'hard', 'Everything placed', 'Every required session is placed on the timetable.'),
   entry('lab_per_day', 'hard', 'Labs per day', 'Limits how many lab sessions one batch has on a single day.', {
     max: intP('Max lab sessions per batch per day', 1, 5),
   }),
   entry('lab_weekly', 'hard', 'Labs per week', 'A lab subject meets each batch its weekly count; a second lab in a week needs "second lab" ticked on the subject.'),
+  entry('student_idle_gap', 'hard', 'Student idle gaps', "No free time between a division's first and last session of a day, except the breaks (hard by default; set the limit above 0 or the severity to soft to allow some).", {
+    max_gap_minutes: intP('Longest acceptable idle time per day (minutes)', 0, 720),
+  }),
   // ---- soft
   entry('faculty_daily_load', 'soft', 'Teacher daily load', "A teacher's sessions per day stay within their own daily limit, or within the default hours.", {
     default_max_hours: intP('Default max teaching hours per day', 1, 24),
@@ -58,9 +61,6 @@ const SPEC_LIST = [
   }),
   entry('student_consecutive', 'soft', 'Student back-to-back hours', 'Avoids long unbroken stretches of teaching for a division.', {
     n: intP('Max consecutive hours', 1, 12),
-  }),
-  entry('student_idle_gap', 'soft', 'Student idle gaps', "Avoids free time between a division's first and last session of a day.", {
-    max_gap_minutes: intP('Longest acceptable idle time per day (minutes)', 0, 720),
   }),
   entry('subject_spread', 'soft', 'Subject spread', 'Spreads a subject over the week instead of repeating it on one day.', {
     max_per_day: intP('Max sessions of one subject per day', 1, 6),

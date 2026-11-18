@@ -53,6 +53,7 @@ test('NO_CLASSROOM_ROOM: pass when there are no theory offerings', () => {
 test('NO_CLASSROOM_ROOM: fail', () => {
   const s = baseState();
   s.rooms = s.rooms.filter((r) => r.is_lab);
+  s.divisions.forEach((d) => { d.home_room_id = null; }); // home classrooms outside the pool would be errors (contract 10.3)
   const [i, ...rest] = R.noClassroomRoom(s);
   assert.equal(rest.length, 0);
   assert.equal(i.code, 'NO_CLASSROOM_ROOM');

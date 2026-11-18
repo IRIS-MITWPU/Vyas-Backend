@@ -1,0 +1,571 @@
+{
+ "name": "Vyas",
+ "address": "Vyas Building, MIT WPU, Kothrud, Pune",
+ "description": "Vyas Building",
+ "is_active": true,
+ "floors": [
+  {
+   "floor_number": 0,
+   "name": "VY - Ground Floor",
+   "rooms": [
+    {
+     "name": "VY 027",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Apple MAC"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 028",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Apple MAC"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 029",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Apple MAC"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 030",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Apple MAC"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY002",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY003",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY004",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY015",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY016",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    }
+   ]
+  },
+  {
+   "floor_number": 1,
+   "name": "VY - First Floor",
+   "rooms": [
+    {
+     "name": "VY 112",
+     "room_type": "lab",
+     "capacity": 32,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY 113",
+     "room_type": "lab",
+     "capacity": 32,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 123",
+     "room_type": "lab",
+     "capacity": 32,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 127",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Apple MAC"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 128",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Apple MAC"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 129",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Apple MAC"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY101",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY102",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY103",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY104",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY114",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY115",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY124",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    }
+   ]
+  },
+  {
+   "floor_number": 2,
+   "name": "VY - Second Floor",
+   "rooms": [
+    {
+     "name": "VY 206",
+     "room_type": "lab",
+     "capacity": 32,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 212",
+     "room_type": "lab",
+     "capacity": 32,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 222",
+     "room_type": "lab",
+     "capacity": 32,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 225",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Windows/Linux PCs"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 226",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Windows/Linux PCs"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 227",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Windows/Linux PCs"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 228",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Windows/Linux PCs"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY201",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY202",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY203",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY204",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY213",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY214",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY223",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    }
+   ]
+  },
+  {
+   "floor_number": 3,
+   "name": "VY - Third Floor",
+   "rooms": [
+    {
+     "name": "VY 314",
+     "room_type": "lab",
+     "capacity": 32,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 324",
+     "room_type": "lab",
+     "capacity": 32,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 327",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Windows/Linux PCs"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 328",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Windows/Linux PCs"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 329",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Windows/Linux PCs"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY 330",
+     "room_type": "lab",
+     "capacity": 62,
+     "equipment": [
+      "Windows/Linux PCs"
+     ],
+     "is_active": true,
+     "requires_approval": true
+    },
+    {
+     "name": "VY301",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY302",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY303",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY304",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY315",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY316",
+     "room_type": "classroom",
+     "capacity": 62,
+     "equipment": [
+      "Projector",
+      "TV"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    }
+   ]
+  },
+  {
+   "floor_number": 6,
+   "name": "VY - Sixth Floor",
+   "rooms": [
+    {
+     "name": "VY-602",
+     "room_type": "conference",
+     "capacity": 17,
+     "equipment": [
+      "Speakers",
+      "VC Camera",
+      "Smart Tv"
+     ],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY-603 CBN 13",
+     "room_type": "discussion",
+     "capacity": 6,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY-603 CBN 14",
+     "room_type": "discussion",
+     "capacity": 6,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY-603 CBN 15",
+     "room_type": "discussion",
+     "capacity": 6,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": false
+    },
+    {
+     "name": "VY-613",
+     "room_type": "conference",
+     "capacity": 17,
+     "equipment": [],
+     "is_active": true,
+     "requires_approval": false
+    }
+   ]
+  }
+ ]
+}

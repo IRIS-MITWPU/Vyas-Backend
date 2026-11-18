@@ -49,8 +49,11 @@ async function buildCtx(db, term) {
     );
     for (const b of batches) byId.get(b.division_id).batches.push(b.name);
   }
+  // a term with a building only resolves the rooms of that building (contract 10.2)
   const rooms = await db.query(
-    "SELECT r.id, r.name, b.name AS building FROM rooms r JOIN floors f ON f.id = r.floor_id JOIN buildings b ON b.id = f.building_id"
+    `SELECT r.id, r.name, b.name AS building FROM rooms r JOIN floors f ON f.id = r.floor_id JOIN buildings b ON b.id = f.building_id
+      WHERE ($1::uuid IS NULL OR f.building_id = $1::uuid)`,
+    [term.building_id ?? null]
   );
   for (const r of rooms.rows) {
     const k = `${collapse(r.building)} / ${collapse(r.name)}`;
@@ -231,7 +234,7 @@ async function applyDivisions(db, results, ctx, termId) {
     let id = ctx.divisions[`${g.semester}|${lc(g.name)}`]?.id;
     if (id) {
       await db.query(
-        "UPDATE planner_divisions SET student_count = $2, home_room_id = COALESCE($3, home_room_id) WHERE id = $1",
+        "UPDATE planner_divisions SET student_count = $2, home_room_id = COALESCE($3, home_room_id), home_room2_id = CASE WHEN home_room2_id = COALESCE($3, home_room_id) THEN NULL ELSE home_room2_id END WHERE id = $1",
         [id, g.student_count, g.home_room_id]
       );
       await db.query("UPDATE planner_batches SET student_count = $2 WHERE division_id = $1 AND is_whole", [id, g.student_count]);

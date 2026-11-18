@@ -53,7 +53,7 @@ export async function buildWorld(api, s, { termExtra = {}, tag = "" } = {}) {
     semester: 3, name: "X", student_count: 24,
     batches: [{ name: "X1", student_count: 8 }, { name: "X2", student_count: 8 }, { name: "X3", student_count: 8 }],
   });
-  const dy = await api("POST", `/terms/${term.id}/divisions`, { semester: 3, name: "Y", student_count: 24, home_room_id: rooms.classrooms[1] });
+  const dy = await api("POST", `/terms/${term.id}/divisions`, { semester: 3, name: "Y", student_count: 24 }); // no home room: the editor tests place Y anywhere (home rooms are tested in building_homerooms.test.js)
   if (dx.status !== 201 || dy.status !== 201) throw new Error(`divisions: ${JSON.stringify([dx.body, dy.body])}`);
   const X = dx.body.division;
   const Y = dy.body.division;

@@ -1,6 +1,8 @@
 // Hard room rules: room_type, room_capacity, and all_placed (contract 9.2).
+import { violatesHomeRooms } from '../../domain/homeRooms.js';
+
 //
-// room_type also reports a placed session whose room is outside the term's room pool, or that has no room at all
+// room_type also reports a theory session of a division WITH home classrooms that sits in another room (contract 10.3), a placed session whose room is outside the term's room pool, or that has no room at all
 // (checkPlacement's ROOM_NOT_IN_POOL is not one of the four blocking keys; this is the closest fit).
 // room_capacity compares a session's own students with the room capacity (exclusive or shared room alike); a shared lab
 // that is over-full because several batches overlap is reported once, under room_clash (blocking), not here.
@@ -25,6 +27,9 @@ export const room_type = {
       } else if (x.kind !== 'lab' && x.room.is_lab) {
         message = `${who} is a theory session but is placed in the lab room ${x.room.name} (${ctx.when(x)}).`;
         fix_hint = 'Move it to a classroom.';
+      } else if (violatesHomeRooms({ subject: { kind: x.kind }, division: x.division, room_id: x.roomId })) {
+        message = `${who} is placed in ${x.room.name}, which is not one of ${ctx.divLabel(x.division)}'s home classrooms (${ctx.when(x)}).`;
+        fix_hint = "Move it to one of the division's home classrooms.";
       }
       if (message) out.push(ctx.issue({ sessions: [x], weekday: x.day, message, fix_hint }));
     }

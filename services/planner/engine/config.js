@@ -42,7 +42,7 @@ export const PARAM_DEFAULTS = Object.freeze({
   faculty_consecutive: { n: 3 },
   faculty_idle_gap: { max_gap_minutes: 180 },
   student_consecutive: { n: 3 },
-  student_idle_gap: { max_gap_minutes: 60 },
+  student_idle_gap: { max_gap_minutes: 0 },
   subject_spread: { max_per_day: 1 },
   room_change: { mode: 'any_break', min_break_minutes: null },
   day_balance: { max_spread_hours: 3 },
@@ -52,7 +52,7 @@ export const PARAM_DEFAULTS = Object.freeze({
 
 const SEVERITY_DEFAULTS = Object.freeze({
   faculty_daily_load: 'soft', faculty_weekly_load: 'soft', faculty_consecutive: 'soft', faculty_idle_gap: 'soft',
-  student_consecutive: 'soft', student_idle_gap: 'soft', subject_spread: 'soft', room_change: 'soft', day_balance: 'soft',
+  student_consecutive: 'soft', student_idle_gap: 'hard', subject_spread: 'soft', room_change: 'soft', day_balance: 'soft',
   division_daily_hours: 'soft', time_of_day: 'soft', lab_per_day: 'hard',
 });
 
@@ -131,7 +131,7 @@ export function buildEngineConfig(rules) {
     divisionRunHours: sc.hard ? runD : null,
     divisionDayHours: dh.hard ? maxDayHours : null,
     facultyDayHours: fl.hard ? defaults.facultyDefaultMaxHours : null,
-    divisionIdleGapMinutes: ig.hard ? num(ig.params.max_gap_minutes, 60) : null,
+    divisionIdleGapMinutes: ig.hard ? num(ig.params.max_gap_minutes, 0) : null,
     theoryCoreWindow: td.hard ? { start: coreStart, end: coreEnd } : null,
   };
 

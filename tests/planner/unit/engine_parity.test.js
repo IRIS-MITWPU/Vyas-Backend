@@ -18,6 +18,9 @@ import { generate, buildEngineConfig, defaultEngineConfig } from '../../../servi
 import { checkIntegrity } from '../real/lib/integrity.mjs';
 
 // ---- helpers (local copy, shared by no other file) ----
+// Contract 10.3: a division with a home classroom is RESTRICTED to it in production; the harness only prefers it. The parity worlds
+// therefore carry no home rooms (the restricted behaviour has its own tests).
+const withoutHomeRooms = (w) => ({ ...w, divisions: w.divisions.map((d) => ({ ...d, home_room_id: null, home_room2_id: null, home_room_ids: [] })) });
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
 /** A copy of the snapshot with the generator result applied (unplace_ids first, then every unit's placements). */
@@ -44,7 +47,8 @@ const placementMap = (snap) => new Map(snap.sessions.map((s) => [s.id, `${s.week
 
 const harnessConfig = () => {
   const c = defaultEngineConfig();
-  return { ...c, weights: { ...c.weights, facultyOverDefault: 0 } };
+  // the harness has no hard idle-gap filter either (the production default is hard/0 since contract 10.1)
+  return { ...c, weights: { ...c.weights, facultyOverDefault: 0 }, hard: { ...c.hard, divisionIdleGapMinutes: null } };
 };
 
 async function harness(world, seed) {
@@ -92,7 +96,7 @@ const small = () =>
 
 test('parity: small worlds, several seeds -> identical day / start / room for every session', async () => {
   for (const seed of [1, 2, 3, 4, 5]) {
-    const w = small();
+    const w = withoutHomeRooms(small());
     const h = await harness(w, seed);
     assert.equal(h.result.unplaced.length, 0);
     const mine = judge(w, generate({ snapshot: w, seed, config: harnessConfig() }));
@@ -105,7 +109,7 @@ const rows = HAS_REAL ? loadImportRows() : null;
 const rooms = HAS_REAL ? readJson('rooms_snapshot.json') : null;
 
 test('parity: the real Sem 3 + Sem 5 data, seed 1 -> identical placements as the harness (harness-equivalent config)', { skip: SKIP_REAL }, async () => {
-  const w = buildWorld({ ...rows, rooms });
+  const w = withoutHomeRooms(buildWorld({ ...rows, rooms }));
   const h = await harness(w, 1);
   assert.equal(h.result.unplaced.length, 0);
   const r = generate({ snapshot: w, seed: 1, config: harnessConfig() });
@@ -117,7 +121,7 @@ test('parity: the real Sem 3 + Sem 5 data, seed 1 -> identical placements as the
 });
 
 test('parity: the true default config (with facultyOverDefault) still places everything clash-free; differing placements are reported', { skip: SKIP_REAL }, async () => {
-  const w = buildWorld({ ...rows, rooms });
+  const w = withoutHomeRooms(buildWorld({ ...rows, rooms }));
   const h = await harness(w, 1);
   const r = generate({ snapshot: w, seed: 1 });
   const mine = judge(w, r);

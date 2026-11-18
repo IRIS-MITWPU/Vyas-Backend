@@ -3,6 +3,7 @@ import { requireFreshAuth } from "../../middlewares/authMiddleware.js";
 import { logAuditEvent } from "../../services/auditLog.js";
 import * as terms from "../../services/planner/terms.js";
 import { ok } from "./respond.js";
+import { emitRevBumps } from "./emit.js";
 
 const r = Router();
 
@@ -19,7 +20,11 @@ r.post("/terms", async (req, res) => {
 
 r.get("/terms/:id", async (req, res) => ok(res, await terms.getTerm(req.params.id)));
 
-r.patch("/terms/:id", async (req, res) => ok(res, { term: await terms.updateTerm(req.params.id, req.body) }));
+r.patch("/terms/:id", async (req, res) => {
+  const { term, bumps } = await terms.updateTermWithBumps(req.params.id, req.body);
+  emitRevBumps(req, bumps); // a building change may have unplaced sessions: open editors refetch
+  ok(res, { term });
+});
 
 r.delete("/terms/:id", requireFreshAuth, async (req, res) => {
   const term = await terms.deleteTerm(req.params.id);

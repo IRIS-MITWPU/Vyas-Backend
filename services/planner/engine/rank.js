@@ -12,8 +12,9 @@
 //     `subjectPerDayMax` / `labPerDayMax` limits (1 = the harness behaviour, back-to-back exception included);
 //   * the per-slot functions (theoryCandidateAt / labBlockCandidateAt) are exported for the repair pass and the
 //     suggestions; the list functions are loops over them.
-import { dayStats, standardStarts, allStarts, hash01, cmpText, unionIntervals, idleBetween } from './time.js';
+import { dayStats, standardStarts, allStarts, hash01, cmpText } from './time.js';
 import { defaultEngineConfig, BASE_WEIGHTS } from './config.js';
+import { homeRoomIds } from '../domain/index.js';
 
 let DEFAULT_CONFIG = null;
 const defaultConfig = () => DEFAULT_CONFIG || (DEFAULT_CONFIG = defaultEngineConfig());
@@ -41,14 +42,6 @@ function deltaStats(model, intervals, add) {
   return { before, after };
 }
 
-/** Longest single idle gap (minutes, breaks excluded) between consecutive blocks of a day. */
-function maxIdleGap(shape, intervals) {
-  const u = unionIntervals(intervals);
-  let g = 0;
-  for (let k = 1; k < u.length; k++) g = Math.max(g, idleBetween(shape, u[k - 1].end, u[k].start));
-  return g;
-}
-
 const hasExplicitCap = (model, f) => !!model.faculty.get(f)?.max_per_day;
 
 /**
@@ -65,8 +58,7 @@ function commonPenalty(model, divId, facultyIds, day, start, end, R, parts) {
   parts.idle = W.idleHour * ((after.idle - before.idle) / 60);
   if (H.divisionRunHours !== null && after.maxRun > H.divisionRunHours && after.maxRun > before.maxRun) hardFail = true;
   if (H.divisionIdleGapMinutes !== null) {
-    const g = maxIdleGap(model.shape, divInt.concat([{ start, end }]));
-    if (g > H.divisionIdleGapMinutes && g > maxIdleGap(model.shape, divInt)) hardFail = true;
+    if (after.idle > H.divisionIdleGapMinutes && after.idle > before.idle) hardFail = true;
   }
   let worstRun = 0;
   let worstLoad = 0;
@@ -160,8 +152,9 @@ export function theoryCandidateAt(model, sid, day, start, R, pre = prepTheory(mo
   }
   parts.spread = spread;
   if (!standard.has(start)) parts.nonStandard = W.nonStandardStart;
-  const home = !!div?.home_room_id && ev.room_id === div.home_room_id;
-  if (div?.home_room_id && !home) parts.notHome = W.notHomeRoom;
+  // contract 10.3: a division with home classrooms never leaves them (the room pick refuses any other room), so there is
+  // no "not home" penalty any more; `home` only feeds the suggestion text ("keeps X in room")
+  const home = homeRoomIds(div).includes(ev.room_id);
   parts.jitter = W.jitter * hash01(`${R.seed}|${i.division_key}|${i.subject_code}|${i.seq}|${day}|${start}`);
   return { day, start, end, score: sum(parts), room_id: ev.room_id, shared: ev.shared, parts, meta: { ...meta, home } };
 }

@@ -9,7 +9,7 @@
  *     rooms: [{ id, room_id, is_lab, name, building_name, capacity|null }],   // term room-pool rows joined with room info
  *     faculty: [{ id, short_code, full_name, profile_id|null, max_per_day|null, max_per_week|null }],  // faculty used in the term
  *     subjects: [{ id, code, name, kind: 'theory'|'lab', duration_min, weekly_count, semester_total|null }],
- *     divisions: [{ id, semester, name, student_count, home_room_id|null,
+ *     divisions: [{ id, semester, name, student_count, home_room_id|null, home_room2_id|null (or home_room_ids: [..]),
  *                   batches: [{ id, name, student_count, is_whole }] }],
  *     offerings: [{ id, division_id, subject_id, weekly_count|null, per_batch,
  *                   faculty: [{ batch_id|null, faculty_id, role }] }]
@@ -23,6 +23,7 @@
 
 import { teachableMinutesPerDay, termWeeks, workingDays, defaultDurationFor } from './termDefaults.js';
 import { expectedSessions, effectiveWeeklyCount, targetBatches } from './sessionSync.js';
+import { homeRoomIds } from './homeRooms.js';
 
 // ---------------------------------------------------------------- helpers
 
@@ -304,23 +305,99 @@ export function roomCapacityUnknown(state) {
     );
 }
 
-/** HOME_ROOM_NOT_IN_POOL (warning). */
+/**
+ * HOME_ROOM_NOT_IN_POOL (contract 10.3): a home classroom of a division that is not in the term's room pool. An ERROR when
+ * none of the division's home rooms is usable (its theory could not be placed anywhere), else a warning.
+ */
 export function homeRoomNotInPool(state) {
   const st = normState(state);
-  const pool = new Set(st.rooms.map((r) => r.room_id ?? r.id));
-  return st.divisions
-    .filter((d) => d.home_room_id && !pool.has(d.home_room_id))
-    .map((d) =>
-      issue(
-        'HOME_ROOM_NOT_IN_POOL',
-        'warning',
-        `The home room of ${divisionLabel(d)} is not in this term's room pool.`,
-        'division',
-        d.id,
-        'divisions',
-        { home_room_id: d.home_room_id },
-      ),
-    );
+  const byRoom = new Map(st.rooms.map((r) => [r.room_id ?? r.id, r]));
+  const out = [];
+  for (const d of st.divisions) {
+    const ids = homeRoomIds(d);
+    const usable = ids.filter((id) => byRoom.has(id) && !byRoom.get(id).is_lab);
+    for (const id of ids) {
+      if (byRoom.has(id)) continue;
+      const none = usable.length === 0;
+      out.push(
+        issue(
+          'HOME_ROOM_NOT_IN_POOL',
+          none ? 'error' : 'warning',
+          none
+            ? `A home classroom of ${divisionLabel(d)} is not in this term's room pool, so its theory classes cannot be placed. Add it to the pool or change the division's home classrooms.`
+            : `A home classroom of ${divisionLabel(d)} is not in this term's room pool.`,
+          'division',
+          d.id,
+          'divisions',
+          { home_room_id: id },
+        ),
+      );
+    }
+  }
+  return out;
+}
+
+/** HOME_ROOM_IS_LAB: a home classroom that the term's pool marks as a lab room (labs are not used for theory). */
+export function homeRoomIsLab(state) {
+  const st = normState(state);
+  const byRoom = new Map(st.rooms.map((r) => [r.room_id ?? r.id, r]));
+  const out = [];
+  for (const d of st.divisions) {
+    const ids = homeRoomIds(d);
+    const usable = ids.filter((id) => byRoom.has(id) && !byRoom.get(id).is_lab);
+    for (const id of ids) {
+      const r = byRoom.get(id);
+      if (!r || !r.is_lab) continue;
+      out.push(
+        issue(
+          'HOME_ROOM_IS_LAB',
+          usable.length === 0 ? 'error' : 'warning',
+          `${roomLabel(r)}, a home classroom of ${divisionLabel(d)}, is marked as a lab room in this term's pool, so theory cannot use it.`,
+          'division',
+          d.id,
+          'divisions',
+          { home_room_id: id },
+        ),
+      );
+    }
+  }
+  return out;
+}
+
+/** NO_HOME_ROOM (warning): divisions without a home classroom use any classroom of the pool. One issue for the term. */
+export function noHomeRoom(state) {
+  const st = normState(state);
+  const without = st.divisions.filter((d) => homeRoomIds(d).length === 0);
+  if (!without.length) return [];
+  const names = without.slice(0, 5).map((d) => d.name).join(', ');
+  const more = without.length > 5 ? ` and ${without.length - 5} more` : '';
+  return [
+    issue(
+      'NO_HOME_ROOM',
+      'warning',
+      `${plural(without.length, 'division')} (${names}${more}) ${without.length === 1 ? 'has' : 'have'} no home classroom, so ${without.length === 1 ? 'its' : 'their'} theory can use any classroom. Pick up to 2 home classrooms per division on the Divisions tab.`,
+      'term',
+      st.term.id ?? null,
+      'divisions',
+      { division_ids: without.map((d) => d.id) },
+    ),
+  ];
+}
+
+/** NO_BUILDING (warning): the term is not tied to a building. Only reported when the term row carries the field. */
+export function noBuilding(state) {
+  const st = normState(state);
+  if (st.term.building_id !== null) return [];
+  return [
+    issue(
+      'NO_BUILDING',
+      'warning',
+      'No building is set for this term, so rooms of any building can be used. Choose the building on the Settings tab.',
+      'term',
+      st.term.id ?? null,
+      'settings',
+    ),
+  ];
 }
 
 /** FACULTY_WEEKLY_OVERLOAD (error): sessions per week > max_per_week. */
@@ -543,6 +620,9 @@ export const checks = {
   ROOM_TOO_SMALL: roomTooSmall,
   ROOM_CAPACITY_UNKNOWN: roomCapacityUnknown,
   HOME_ROOM_NOT_IN_POOL: homeRoomNotInPool,
+  HOME_ROOM_IS_LAB: homeRoomIsLab,
+  NO_HOME_ROOM: noHomeRoom,
+  NO_BUILDING: noBuilding,
   FACULTY_WEEKLY_OVERLOAD: facultyWeeklyOverload,
   FACULTY_DAILY_CAP_INFEASIBLE: facultyDailyCapInfeasible,
   DIVISION_HOURS_OVER_CAPACITY: divisionHoursOverCapacity,

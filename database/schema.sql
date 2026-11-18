@@ -939,6 +939,7 @@ CREATE TABLE IF NOT EXISTS planner_terms (
   theory_minutes INT         NOT NULL DEFAULT 60,
   lab_minutes    INT         NOT NULL DEFAULT 120,
   breaks         JSONB       NOT NULL DEFAULT '[{"start_min":630,"end_min":645,"label":"Short break 1"},{"start_min":765,"end_min":810,"label":"Lunch"},{"start_min":930,"end_min":945,"label":"Short break 2"}]'::jsonb,
+  building_id    UUID        REFERENCES buildings(id) ON DELETE SET NULL,   -- migration 019: NULL = no building restriction
   created_by     UUID        REFERENCES profiles(id) ON DELETE SET NULL,
   created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -998,8 +999,10 @@ CREATE TABLE IF NOT EXISTS planner_divisions (
   name          TEXT     NOT NULL,
   student_count INT      NOT NULL DEFAULT 0,
   home_room_id  UUID     REFERENCES rooms(id) ON DELETE SET NULL,
+  home_room2_id UUID     REFERENCES rooms(id) ON DELETE SET NULL,   -- migration 019: optional second home classroom
   CONSTRAINT planner_divisions_semester_check      CHECK (semester BETWEEN 1 AND 12),
   CONSTRAINT planner_divisions_student_count_check CHECK (student_count >= 0),
+  CONSTRAINT planner_divisions_home_rooms_distinct CHECK (home_room2_id IS NULL OR home_room2_id <> home_room_id),
   CONSTRAINT planner_divisions_unique              UNIQUE (term_id, semester, name)
 );
 
@@ -1152,6 +1155,8 @@ CREATE INDEX IF NOT EXISTS idx_planner_terms_created_by         ON planner_terms
 CREATE INDEX IF NOT EXISTS idx_planner_term_rooms_room          ON planner_term_rooms (room_id);
 CREATE INDEX IF NOT EXISTS idx_planner_divisions_term           ON planner_divisions (term_id);
 CREATE INDEX IF NOT EXISTS idx_planner_divisions_home_room      ON planner_divisions (home_room_id);
+CREATE INDEX IF NOT EXISTS idx_planner_divisions_home_room2     ON planner_divisions (home_room2_id);
+CREATE INDEX IF NOT EXISTS idx_planner_terms_building           ON planner_terms (building_id);
 CREATE INDEX IF NOT EXISTS idx_planner_offerings_division       ON planner_offerings (division_id);
 CREATE INDEX IF NOT EXISTS idx_planner_offerings_subject        ON planner_offerings (subject_id);
 CREATE INDEX IF NOT EXISTS idx_planner_offering_faculty_faculty ON planner_offering_faculty (faculty_id);

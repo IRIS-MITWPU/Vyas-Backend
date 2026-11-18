@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { OccupancyModel } from '../../../services/planner/engine/model.js';
 import { theoryCandidates, labBlockCandidates, labStartPenalty, divisionOrder } from '../../../services/planner/engine/rank.js';
 import { standardStarts, fmt } from '../../../services/planner/engine/time.js';
+import { buildEngineConfig } from '../../../services/planner/engine/config.js';
 import { mini, sessionOf, roomId } from '../real/lib/testkit.mjs';
+
+const SOFT_IDLE = buildEngineConfig([{ rule_key: 'student_idle_gap', enabled: true, severity: 'soft', weight: 1, params: { max_gap_minutes: 60 } }]); // these tests predate the hard no-idle-time default
+
 
 const MON = 0;
 const rooms = [{ name: 'C1', cap: 60 }, { name: 'C2', cap: 60 }, { name: 'LAB1', lab: true, cap: 62 }, { name: 'LAB2', lab: true, cap: 62 }, { name: 'LAB3', lab: true, cap: 62 }];
@@ -100,7 +104,7 @@ test('rank: runs longer than 3 consecutive hours are penalised, lunch ends a run
   put(m, w, 'T2', 1, MON, 510);
   put(m, w, 'T3', 1, MON, 570);
   put(m, w, 'T1', 1, MON, 645); // 08:30-11:45 = 3 h run (short break only)
-  const c = theoryCandidates(m, sessionOf(w, 'X', 'T4', 'ALL', 1).id, { strict: false });
+  const c = theoryCandidates(m, sessionOf(w, 'X', 'T4', 'ALL', 1).id, { strict: false, config: SOFT_IDLE });
   const at = (start) => c.find((x) => x.day === MON && x.start === start);
   assert.ok(at(705).parts.runDivision >= 15, '11:45 would make a 4 h run');
   assert.equal(at(810).parts.runDivision, 0, '13:30 starts a new run after lunch');
@@ -192,7 +196,7 @@ test('rank: lab candidates need all teachers and all batches free, and a lab roo
   const th = sessionOf(w, 'X', 'T1', 'ALL', 1);
   const e = m.evaluate(th.id, MON, 645);
   m.place(th.id, MON, 645, e.end, e.room_id, e.shared); // whole division busy 10:45-11:45
-  const c = labBlockCandidates(m, blockOf(w, m), {});
+  const c = labBlockCandidates(m, blockOf(w, m), { config: SOFT_IDLE });
   assert.ok(!c.some((x) => x.day === MON && x.start === 645), 'overlaps the lecture');
   assert.ok(c.some((x) => x.day === MON && x.start === 810));
   // no lab rooms at all -> nothing feasible

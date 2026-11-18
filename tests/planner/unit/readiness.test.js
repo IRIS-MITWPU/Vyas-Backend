@@ -28,6 +28,7 @@ test('checks registry: one exported function per code, all codes of the contract
     'LAB_ROOMS_INSUFFICIENT', 'ROOM_TOO_SMALL', 'ROOM_CAPACITY_UNKNOWN', 'HOME_ROOM_NOT_IN_POOL',
     'FACULTY_WEEKLY_OVERLOAD', 'FACULTY_DAILY_CAP_INFEASIBLE', 'DIVISION_HOURS_OVER_CAPACITY',
     'SEMESTER_TOTAL_MISMATCH', 'FACULTY_NOT_LINKED', 'LAB_KIND_MISMATCH', 'LAB_NO_BATCHES', 'NO_DATES',
+    'HOME_ROOM_IS_LAB', 'NO_HOME_ROOM', 'NO_BUILDING', // contract 10
   ];
   assert.deepEqual([...ISSUE_CODES].sort(), [...contract].sort());
   for (const c of contract) assert.equal(typeof checks[c], 'function', c);
@@ -196,12 +197,36 @@ test('HOME_ROOM_NOT_IN_POOL: pass (and null home room is fine)', () => {
   s.divisions[0].home_room_id = null;
   assert.deepEqual(R.homeRoomNotInPool(s), []);
 });
-test('HOME_ROOM_NOT_IN_POOL: fail', () => {
+test('HOME_ROOM_NOT_IN_POOL: fail (an ERROR when no home room of the division is usable, a warning when another one is)', () => {
   const s = baseState();
   s.divisions[0].home_room_id = 'room-99';
   const [i] = R.homeRoomNotInPool(s);
-  assert.equal(i.severity, 'warning');
+  assert.equal(i.severity, 'error');
   assert.equal(i.entity.type, 'division');
+  assert.equal(computeReadiness(s).ready, false);
+  // a second home room that is in the pool keeps the division placeable: only a warning
+  const t = baseState();
+  const inPool = t.rooms.find((r) => !r.is_lab).room_id;
+  t.divisions[0].home_room_ids = ['room-99', inPool];
+  const [j] = R.homeRoomNotInPool(t);
+  assert.equal(j.severity, 'warning');
+});
+
+test('HOME_ROOM_IS_LAB / NO_HOME_ROOM / NO_BUILDING (contract 10)', () => {
+  const s = baseState();
+  const lab = s.rooms.find((r) => r.is_lab);
+  s.divisions[0].home_room_id = lab.room_id;
+  const [l] = R.homeRoomIsLab(s);
+  assert.equal(l.severity, 'error');
+  s.divisions.forEach((d) => { d.home_room_id = null; });
+  const [n] = R.noHomeRoom(s);
+  assert.equal(n.severity, 'warning');
+  assert.equal(n.entity.tab, 'divisions');
+  assert.deepEqual(R.noBuilding({ ...s, term: { ...s.term, building_id: 'b1' } }), []);
+  assert.deepEqual(R.noBuilding(s), [], 'no building field at all (older state): not reported');
+  const [b] = R.noBuilding({ ...s, term: { ...s.term, building_id: null } });
+  assert.equal(b.severity, 'warning');
+  assert.equal(b.entity.tab, 'settings');
 });
 
 // ---- FACULTY_WEEKLY_OVERLOAD
@@ -427,8 +452,7 @@ for (const [code, fn] of Object.entries(perturbations)) {
 const warnPerturbations = {
   SUBJECT_UNUSED: (s) => s.subjects.push({ id: 'sx', code: 'XX', name: 'Extra', kind: 'theory', duration_min: 60, weekly_count: 1 }),
   LAB_ROOMS_INSUFFICIENT: (s) => (s.rooms = s.rooms.filter((r) => !r.is_lab).concat(s.rooms.filter((r) => r.is_lab).slice(0, 2))),
-  NO_CLASSROOM_ROOM: (s) => (s.rooms = s.rooms.filter((r) => r.is_lab)),
-  HOME_ROOM_NOT_IN_POOL: (s) => (s.divisions[0].home_room_id = 'nowhere'),
+  NO_CLASSROOM_ROOM: (s) => { s.rooms = s.rooms.filter((r) => r.is_lab); s.divisions.forEach((d) => { d.home_room_id = null; }); },
   SEMESTER_TOTAL_MISMATCH: (s) => (s.subjects[0].semester_total = 1),
   LAB_KIND_MISMATCH: (s) => {
     const o = s.offerings.find((x) => x.per_batch);

@@ -257,7 +257,8 @@ test("occupancy is zero for unplaced sessions; a fresh sync adds none", async ()
 test("auto room: theory uses the home room, then another free classroom; labs get a lab; NO_ROOM_AVAILABLE when none is free", async () => {
   const classroomSet = new Set(w.rooms.classrooms);
   const labSet = new Set(w.rooms.labs);
-  // Y has home room classrooms[1]
+  // Y gets the home room classrooms[1] for this part of the test (contract 10.3: a division with home rooms only uses them)
+  assert.equal((await w.api("PATCH", `/terms/${w.termId}/divisions/${w.Y.id}`, { home_room_ids: [w.rooms.classrooms[1]] })).status, 200);
   const y1 = await ops(w, [place(w, S(w, "Y", "TH1", "ALL", 1), MON, 570)]);
   assert.equal(y1.body.results[0].room_id, w.rooms.classrooms[1]);
   // X has none: any free classroom, never the busy home room of Y at the same time
@@ -269,6 +270,7 @@ test("auto room: theory uses the home room, then another free classroom; labs ge
   // Y's home room is busy: a second Y theory elsewhere in time is back in the home room (free again)
   const y2 = await ops(w, [place(w, S(w, "Y", "TH2"), MON, 705)]);
   assert.equal(y2.body.results[0].room_id, w.rooms.classrooms[1]);
+  assert.equal((await w.api("PATCH", `/terms/${w.termId}/divisions/${w.Y.id}`, { home_room_ids: [] })).status, 200); // the rest places Y freely
 
   // labs (contract 8.7, CHANGED from "one lab room per batch lab"): the three 8-student batch labs of X share ONE lab
   // room (best fit = the fullest lab that still has space, ties: smallest capacity). The pool's labs seat 30 and 62.

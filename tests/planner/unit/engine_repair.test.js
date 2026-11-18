@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generate, OccupancyModel, theoryCandidates, repairUnplaced } from '../../../services/planner/engine/index.js';
+import { generate, OccupancyModel, theoryCandidates, repairUnplaced, buildEngineConfig } from '../../../services/planner/engine/index.js';
+const SOFT_IDLE = buildEngineConfig([{ rule_key: 'student_idle_gap', enabled: true, severity: 'soft', weight: 1, params: { max_gap_minutes: 60 } }]); // these tests predate the hard no-idle-time default
+
 import { mini, sessionOf, roomId, placeIn } from '../real/lib/testkit.mjs';
 
 import { checkIntegrity } from '../real/lib/integrity.mjs';
@@ -142,10 +144,10 @@ const labDeadEnd = () => {
 
 test('repair: a lab block moves as a whole unit and keeps its invariants (one session per batch, parallel, disjoint teachers)', () => {
   const w = labDeadEnd();
-  const plain = generate({ snapshot: w, seed: 1, repair: { enabled: false } });
+  const plain = generate({ snapshot: w, seed: 1, repair: { enabled: false }, config: SOFT_IDLE });
   assert.equal(plain.unplaced.length, 1, 'greedy strands Y1/L1');
   assert.equal(plain.unplaced[0].subject_code, 'L1');
-  const r = generate({ snapshot: w, seed: 1 });
+  const r = generate({ snapshot: w, seed: 1, config: SOFT_IDLE });
   assert.equal(r.unplaced.length, 0);
   assert.equal(r.stats.repair_moves, 1);
   const { snap, integrity } = judge(w, r);

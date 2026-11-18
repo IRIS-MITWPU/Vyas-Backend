@@ -7,13 +7,15 @@
 //   2. places U at the slot (re-validated through the candidate functions, relaxed pass, so every hard rule still holds:
 //      lab per day, subject per day, teacher max_per_day, rules the admin set to 'hard'),
 //   3. looks for another slot for the removed unit (same candidate functions, with U in place) and puts it there.
+// With the hard no-idle-time rule on, a chain that would leave ANY division day with more idle time than before (taking the
+// unit out of the middle of a day opens a hole there) is rolled back too.
 // If any step fails, everything is rolled back exactly (placement records incl. room and shared flag). Whole units
 // only: a lab block always moves as a block, so the rotation invariants (one session per batch, disjoint teachers,
 // one block per batch per day) are kept by the candidate validation.
 //
 // Bounded: at most `maxAttemptsPerSession` (default 200) tried (slot, blocker) pairs per unplaced session and at most
 // `maxMoves` (default 500) accepted moves in total.
-import { allStarts, standardStarts, validPlacement } from './time.js';
+import { allStarts, standardStarts, validPlacement, dayStats } from './time.js';
 import { theoryCandidateAt, theoryCandidates, labBlockCandidateAt, labBlockCandidates, labDayOk, prepTheory, prepLab, resolveOpts, scoreOf } from './rank.js';
 
 /**
@@ -66,6 +68,23 @@ export function repairUnplaced(model, ctx) {
     else model.place(sids[0], c.day, c.start, c.end, c.room_id, c.shared);
   }
 
+  /** Idle minutes of every (division, day) of the given divisions, now. */
+  function idleMap(divIds) {
+    const m = new Map();
+    for (const d of new Set(divIds)) for (const day of model.shape.days) m.set(`${d}|${day}`, dayStats(model.shape, model.divisionDay(d, day)).idle);
+    return m;
+  }
+
+  /** True when no division day of `before` has more idle time now than max(limit, what it had before). */
+  function noNewIdle(before) {
+    const limit = R.H.divisionIdleGapMinutes;
+    for (const [key, was] of before) {
+      const [d, day] = key.split('|');
+      if (dayStats(model.shape, model.divisionDay(d, Number(day))).idle > Math.max(limit, was)) return false;
+    }
+    return true;
+  }
+
   /** Best slot for a whole unit (all its sessions) with the current model, or null. */
   function bestFor(unit) {
     if (unit.kind === 'theory') return theoryCandidates(model, unit.sids[0], { config: ctx.config, strict: false, seed: ctx.seed })[0] ?? null;
@@ -89,6 +108,7 @@ export function repairUnplaced(model, ctx) {
       tried += 1;
       attempts += 1;
       const saved = unit.sids.map((s) => model.recordOf(s));
+      const idleBefore = R.H.divisionIdleGapMinutes === null ? null : idleMap([i.division_id, model.info.get(unit.sids[0]).division_id]);
       for (const s of unit.sids) model.unplace(s);
       const rollback = () => {
         model.unplace(U);
@@ -107,6 +127,10 @@ export function repairUnplaced(model, ctx) {
         continue;
       }
       put(cb, unit.sids);
+      if (idleBefore && !noNewIdle(idleBefore)) {
+        rollback();
+        continue;
+      }
       unit.score = scoreOf(cb.parts); // the moved unit's penalty (best-of-N scoring)
       ctx.addUnit([U], i.kind === 'lab' ? 'lab_block' : 'theory', scoreOf(cu.parts));
       return true;

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_HOME_ROOMS, homeRoomIds } from "./domain/homeRooms.js";
 import { pool, withTransaction } from "./tx.js";
 import { parse, failField, text, intIn, uuid } from "./validate.js";
 import { LIMITS } from "./domain/limits.js";
@@ -17,6 +18,8 @@ const createSchema = z.object({
   name: text(LIMITS.division_name),
   student_count: intIn(LIMITS.student_count).default(0),
   home_room_id: uuid.nullable().optional(),
+  // contract 10.3: at most 2 home classrooms; wins over the legacy home_room_id when both are sent
+  home_room_ids: z.array(uuid).max(MAX_HOME_ROOMS, `a division has at most ${MAX_HOME_ROOMS} home classrooms`).optional(),
   batches: z.array(batchInput).max(30).optional(),
 });
 const patchSchema = z.object({
@@ -24,16 +27,61 @@ const patchSchema = z.object({
   name: text(LIMITS.division_name),
   student_count: intIn(LIMITS.student_count),
   home_room_id: uuid.nullable(),
+  home_room_ids: z.array(uuid).max(MAX_HOME_ROOMS, `a division has at most ${MAX_HOME_ROOMS} home classrooms`),
 }).partial();
 const batchPatchSchema = z.object({ name: batchName, student_count: intIn(LIMITS.student_count) }).partial();
 
-const DIV_COLS = "d.id, d.term_id, d.semester, d.name, d.student_count, d.home_room_id";
+const DIV_COLS = "d.id, d.term_id, d.semester, d.name, d.student_count, d.home_room_id, d.home_room2_id";
 const BATCH_COLS = "b.id, b.division_id, b.name, b.student_count, b.is_whole";
 
-async function assertRoomExists(db, roomId) {
-  if (!roomId) return;
-  const { rows } = await db.query("SELECT 1 FROM rooms WHERE id = $1", [roomId]);
-  if (!rows.length) failField("home_room_id", "room not found");
+/**
+ * The home rooms a create/patch asks for, as a de-duplicated list (null = the body says nothing about them).
+ * home_room_ids wins; the legacy home_room_id sets the first room and keeps the second one (patch) / none (create).
+ */
+function requestedHomeRooms(b, current = null) {
+  if (b.home_room_ids !== undefined) {
+    const ids = [...new Set(b.home_room_ids)];
+    if (ids.length !== b.home_room_ids.length) failField("home_room_ids", "the same room is listed twice");
+    return ids;
+  }
+  if (b.home_room_id !== undefined) {
+    const rest = current ? homeRoomIds(current).slice(1) : [];
+    return [b.home_room_id, ...rest].filter((x, i, a) => x && a.indexOf(x) === i).slice(0, MAX_HOME_ROOMS);
+  }
+  return null;
+}
+
+/** Every home room must exist, be active, be in the term's building (when it has one) and not be a lab room. */
+async function assertHomeRooms(db, termId, ids) {
+  if (!ids.length) return;
+  const { rows: [term] } = await db.query("SELECT building_id FROM planner_terms WHERE id = $1", [termId]);
+  const { rows } = await db.query(
+    `SELECT r.id, r.name, r.is_active, r.room_type::text AS room_type, f.building_id, tr.is_lab AS pool_is_lab
+       FROM rooms r JOIN floors f ON f.id = r.floor_id
+       LEFT JOIN planner_term_rooms tr ON tr.room_id = r.id AND tr.term_id = $2
+      WHERE r.id = ANY($1::uuid[])`,
+    [ids, termId]
+  );
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  ids.forEach((id, i) => {
+    const field = `home_room_ids.${i}`;
+    const r = byId.get(id);
+    if (!r) failField(field, "room not found");
+    if (r.is_active === false) failField(field, `${r.name} is not an active room`);
+    if (term?.building_id && r.building_id !== term.building_id) failField(field, `${r.name} is not in this term's building`);
+    // the term pool's own is_lab flag decides (it can override room_type per term); rooms outside the pool fall back to room_type
+    const isLab = r.pool_is_lab ?? r.room_type === "lab";
+    if (isLab) failField(field, `${r.name} is a lab room; home rooms are classrooms`);
+  });
+}
+
+/** Writes the two home room columns for a division. */
+const homeColumns = (ids) => [ids[0] ?? null, ids[1] ?? null];
+
+/** Adds the derived `home_room_ids` (0-2 ids, first room first) to a division row. */
+function withHomeRooms(d) {
+  d.home_room_ids = homeRoomIds(d);
+  return d;
 }
 
 async function divisionsWithBatches(db, where, params) {
@@ -46,7 +94,10 @@ async function divisionsWithBatches(db, where, params) {
     `SELECT ${BATCH_COLS} FROM planner_batches b WHERE b.division_id = ANY($1::uuid[]) ORDER BY b.is_whole DESC, lower(b.name)`,
     [divisions.map((d) => d.id)]
   );
-  for (const d of divisions) d.batches = batches.filter((b) => b.division_id === d.id);
+  for (const d of divisions) {
+    d.batches = batches.filter((b) => b.division_id === d.id);
+    withHomeRooms(d);
+  }
   return divisions;
 }
 
@@ -88,12 +139,14 @@ export async function createDivision(termId, body) {
   return orDuplicate("A division with this name already exists in that semester", () =>
     withTransaction(async (db) => {
       await requireTerm(db, termId, { lock: true });
-      await assertRoomExists(db, b.home_room_id);
+      const homeIds = requestedHomeRooms(b) ?? [];
+      await assertHomeRooms(db, termId, homeIds);
       await assertDivisionNameFree(db, termId, b.semester, b.name);
+      const [h1, h2] = homeColumns(homeIds);
       const { rows: [{ id }] } = await db.query(
-        `INSERT INTO planner_divisions (term_id, semester, name, student_count, home_room_id)
-         VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-        [termId, b.semester, b.name, b.student_count, b.home_room_id ?? null]
+        `INSERT INTO planner_divisions (term_id, semester, name, student_count, home_room_id, home_room2_id)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+        [termId, b.semester, b.name, b.student_count, h1, h2]
       );
       await db.query(
         "INSERT INTO planner_batches (division_id, name, student_count, is_whole) VALUES ($1, 'ALL', $2, true)",
@@ -121,17 +174,24 @@ export async function updateDivision(termId, did, body) {
         const n = await countPlacedSharedLabSessions(db, "division", did);
         if (n > 0) throw studentCountLocked(`Division ${current.name}`, n);
       }
-      await assertRoomExists(db, patch.home_room_id);
+      const homeIds = requestedHomeRooms(patch, current);
+      if (homeIds) await assertHomeRooms(db, termId, homeIds);
       const semester = patch.semester ?? current.semester;
       const name = patch.name ?? current.name;
       if (semester !== current.semester || name !== current.name) await assertDivisionNameFree(db, termId, semester, name, did);
       const sets = [];
       const vals = [did];
       for (const k of keys) {
+        if (k === "home_room_id" || k === "home_room_ids") continue; // written below, as the pair
         vals.push(patch[k]);
         sets.push(`${k} = $${vals.length}`);
       }
-      await db.query(`UPDATE planner_divisions SET ${sets.join(", ")} WHERE id = $1`, vals);
+      if (homeIds) {
+        const [h1, h2] = homeColumns(homeIds);
+        vals.push(h1, h2);
+        sets.push(`home_room_id = $${vals.length - 1}`, `home_room2_id = $${vals.length}`);
+      }
+      if (sets.length) await db.query(`UPDATE planner_divisions SET ${sets.join(", ")} WHERE id = $1`, vals);
       if (patch.student_count !== undefined) {
         // the whole batch always mirrors the division
         await db.query("UPDATE planner_batches SET student_count = $2 WHERE division_id = $1 AND is_whole", [did, patch.student_count]);

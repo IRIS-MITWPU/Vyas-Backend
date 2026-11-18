@@ -31,10 +31,16 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 psql -U postgres -d vyas -f database/schema.sql
 ```
 
-Optionally seed with sample data (dev only):
+Optionally seed the real Vyas data (dev only; refuses `NODE_ENV=production`):
 ```bash
 npm run seed
 ```
+This creates the Vyas building (5 floors, 53 rooms), one planner term (2026-27 odd CSE: pool rooms, rules,
+faculty, divisions, batches, subjects, offerings and a draft timetable) and 4 test accounts
+(`admin@mitwpu.edu.in` + 3 faculty) used by the tests. It seeds no real users, bookings, templates or
+timetable-import data, is safe to re-run, and never overwrites an existing planner term. Run
+`npm run db:migrate` first. The data lives in `database/seed-data/*.json`
+(refresh with `node scripts/export-seed-data.mjs` against a populated DB).
 
 ### 4. Start the server
 

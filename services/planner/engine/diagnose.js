@@ -1,10 +1,11 @@
 // Why is a session unplaced? (port of diagnose() of tests/planner/real/lib/engine.mjs, with plain-English texts.) Pure.
 //
 // diagnose(model, sid, reason?, config?, {ignoreSlot?:{day,start}}) -> {code, text, slots:{total,free,faculty,batch,room}, teachers, engine, day_names}
-// code: FACULTY_BUSY | DIVISION_BUSY | NO_ROOM | POLICY_RULES | LOCKED. (SERVER_REFUSED / TRY_LIMIT are set by the caller
+// code: FACULTY_BUSY | DIVISION_BUSY | NO_ROOM | POLICY_RULES | IDLE_GAP | LOCKED. (SERVER_REFUSED / TRY_LIMIT are set by the caller
 // through `reason.code`; the in-memory engine itself never produces them.)
 import { allStarts, dayName } from './time.js';
 import { theoryCandidates, labBlockCandidates } from './rank.js';
+import { defaultEngineConfig } from './config.js';
 
 /** Is there any slot left that satisfies the hard rules (the relaxed candidate lists)? */
 export function hasPolicyCandidate(model, sid, config) {
@@ -78,8 +79,17 @@ export function diagnose(model, sid, reason = null, config = undefined, { ignore
   } else if (c.free > 0) {
     const policy = hasPolicyCandidate(model, sid, config);
     if (!policy) {
-      code = 'POLICY_RULES';
-      text = `${c.free} slot${c.free === 1 ? ' is' : 's are'} free, but each would break a hard rule (the same subject twice a day, a second lab for the batch that day, a teacher's daily limit, or a rule set to hard).`;
+      const cfg = config || defaultEngineConfig();
+      const idleHard = cfg.hard.divisionIdleGapMinutes !== null;
+      const withoutIdle = idleHard && hasPolicyCandidate(model, sid, { ...cfg, hard: { ...cfg.hard, divisionIdleGapMinutes: null} });
+      if (withoutIdle) {
+        // the "no free time between lectures" rule is the only thing standing in the way
+        code = 'IDLE_GAP';
+        text = `${c.free} slot${c.free === 1 ? ' is' : 's are'} free, but each would leave free time between ${i.division_name}'s lectures on that day (the "no idle time" rule). Move another session next to this one's slot, or allow some idle time on the Rules tab.`;
+      } else {
+        code = 'POLICY_RULES';
+        text = `${c.free} slot${c.free === 1 ? ' is' : 's are'} free, but each would break a hard rule (the same subject twice a day, a second lab for the batch that day, a teacher's daily limit, or a rule set to hard).`;
+      }
     } else if (reason && (reason.code === 'SERVER_REFUSED' || reason.code === 'TRY_LIMIT')) {
       code = reason.code;
       text = `${c.free} slot${c.free === 1 ? ' looks' : 's look'} free, but the server refused every candidate tried${reason.last?.message ? ` (${reason.last.message})` : ''}.`;

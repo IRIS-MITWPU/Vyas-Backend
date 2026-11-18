@@ -23,6 +23,7 @@ import { loadSubjects } from "./state.js";
 import { getVersion, loadSessions } from "./sessions.js";
 import {
   checkPlacement, occupancyRows, pickRoom, describeConflict, describeCapacity, fitsInRoom, isShareable, peakLoad, studentsFor,
+  allHomeRoomIds, violatesHomeRooms,
 } from "./domain/index.js";
 
 // ------------------------------------------------------------------ snapshot
@@ -105,6 +106,7 @@ async function loadContext(db, version) {
   }
   return {
     term, subjects, divisions, batchInfo, poolRooms,
+    reservedRoomIds: allHomeRoomIds(divisions),
     poolRoomIds: new Set(poolRooms.map((r) => r.room_id)),
     roomsById: new Map(poolRooms.map((r) => [r.room_id, r])),
   };
@@ -323,7 +325,7 @@ async function opPlace(db, version, ctx, i, op, s) {
   const division = ctx.divisions.get(s.division_id);
   const batch = division.batches.find((b) => b.id === s.batch_id);
   const check = checkPlacement({
-    term: ctx.term, subject, weekday: op.weekday, start_min: op.start_min, room_id: op.room_id ?? undefined, poolRoomIds: ctx.poolRoomIds,
+    term: ctx.term, subject, weekday: op.weekday, start_min: op.start_min, room_id: op.room_id ?? undefined, poolRoomIds: ctx.poolRoomIds, division,
   });
   if (!check.ok) throw placementInvalid(check.message, check.reason, i);
 
@@ -331,7 +333,7 @@ async function opPlace(db, version, ctx, i, op, s) {
   if (!roomId) {
     const roomLoads = await roomLoadsAt(db, version.id, op.weekday, op.start_min, check.end_min, s.id);
     const pick = pickRoom({
-      subject, division, batch, poolRooms: ctx.poolRooms, roomLoads, currentRoomId: isPlaced(s) ? s.room_id : null,
+      subject, division, batch, poolRooms: ctx.poolRooms, roomLoads, currentRoomId: isPlaced(s) ? s.room_id : null, reservedRoomIds: ctx.reservedRoomIds,
     });
     if (!pick.room_id) throw noRoomAvailable(pick.reason, i);
     roomId = pick.room_id;
@@ -371,6 +373,9 @@ async function opSetRoom(db, version, ctx, i, op, s) {
   }
   if (!ctx.poolRoomIds.has(op.room_id)) {
     throw placementInvalid("That room is not in this term's room pool.", "ROOM_NOT_IN_POOL", i);
+  }
+  if (violatesHomeRooms({ subject: ctx.subjects.get(s.subject_id), division: ctx.divisions.get(s.division_id), room_id: op.room_id })) {
+    throw placementInvalid(`Division ${ctx.divisions.get(s.division_id).name} only uses its own classrooms for theory. Pick one of them.`, "ROOM_NOT_HOME", i);
   }
   if (s.room_id === op.room_id) return false;
   await rewriteOccupancy(db, version.id, ctx, i, s, { ...s, room_id: op.room_id });

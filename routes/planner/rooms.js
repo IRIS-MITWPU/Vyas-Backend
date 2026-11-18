@@ -4,7 +4,8 @@ import { ok } from "./respond.js";
 
 const r = Router();
 
-r.get("/available-rooms", async (req, res) => ok(res, { rooms: await rooms.availableRooms() }));
+// ?term_id=<id> restricts the list to the term's building (all active rooms when the term has none)
+r.get("/available-rooms", async (req, res) => ok(res, { rooms: await rooms.availableRooms(req.query.term_id ? String(req.query.term_id) : null) }));
 
 r.get("/terms/:id/rooms", async (req, res) => ok(res, { rooms: await rooms.listPool(req.params.id) }));
 // Adds one room ({room_id}) or several ({room_ids}); answers with the rows that were added.

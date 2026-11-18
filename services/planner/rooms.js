@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { pool, withTransaction } from "./tx.js";
 import { parse, failField, uuid } from "./validate.js";
-import { notFound, duplicate, inUse, lockedByPlacements } from "./errors.js";
+import { notFound, duplicate, inUse, lockedByPlacements, roomWrongBuilding } from "./errors.js";
 import { lockTermVersions } from "./guards.js";
 import { requireTerm } from "./terms.js";
 
@@ -13,17 +13,25 @@ const addSchema = z.object({
 const patchSchema = z.object({ is_lab: z.boolean({ error: "is required" }) });
 
 const POOL_SELECT = `
-  SELECT tr.id, tr.term_id, tr.room_id, tr.is_lab, r.name, b.name AS building_name, f.floor_number,
+  SELECT tr.id, tr.term_id, tr.room_id, tr.is_lab, r.name, b.name AS building_name, b.id AS building_id, f.floor_number,
          r.room_type::text AS room_type, r.capacity
     FROM planner_term_rooms tr
+    JOIN planner_terms t ON t.id = tr.term_id
     JOIN rooms r ON r.id = tr.room_id
     JOIN floors f ON f.id = r.floor_id
     JOIN buildings b ON b.id = f.building_id`;
 const POOL_ORDER = "ORDER BY lower(b.name), f.floor_number, lower(r.name)";
 
-/** Term room-pool rows joined with room info (also used to build the readiness state). */
+/**
+ * Term room-pool rows joined with room info (also used to build the readiness state, the snapshot, the editor and the
+ * generator). A term with a building only ever sees the rooms of that building (contract 10.2), even if a stale pool
+ * row of another building still exists.
+ */
 export async function loadPoolRooms(db, termId) {
-  const { rows } = await db.query(`${POOL_SELECT} WHERE tr.term_id = $1 ${POOL_ORDER}`, [termId]);
+  const { rows } = await db.query(
+    `${POOL_SELECT} WHERE tr.term_id = $1 AND (t.building_id IS NULL OR b.id = t.building_id) ${POOL_ORDER}`,
+    [termId]
+  );
   return rows;
 }
 
@@ -32,12 +40,18 @@ export async function listPool(termId) {
   return loadPoolRooms(pool, termId);
 }
 
-/** All active Vyas rooms for the room-pool picker. */
-export async function availableRooms() {
+/** All active Vyas rooms for the room-pool picker; with a termId, only the rooms of the term's building (when it has one). */
+export async function availableRooms(termId = null) {
+  let buildingId = null;
+  if (termId) {
+    if (!uuid.safeParse(termId).success) failField("term_id", "must be a valid id");
+    buildingId = (await requireTerm(pool, termId)).building_id;
+  }
   const { rows } = await pool.query(
-    `SELECT r.id, r.name, b.name AS building_name, f.floor_number, r.room_type::text AS room_type, r.capacity, r.is_active
+    `SELECT r.id, r.name, b.name AS building_name, b.id AS building_id, f.floor_number, r.room_type::text AS room_type, r.capacity, r.is_active
        FROM rooms r JOIN floors f ON f.id = r.floor_id JOIN buildings b ON b.id = f.building_id
-      WHERE r.is_active ${POOL_ORDER}`
+      WHERE r.is_active AND ($1::uuid IS NULL OR b.id = $1::uuid) ${POOL_ORDER}`,
+    [buildingId]
   );
   return rows;
 }
@@ -50,12 +64,26 @@ export async function addPoolRooms(termId, body) {
   const ids = [...new Set(b.room_ids ?? [b.room_id])];
 
   const addedIds = await withTransaction(async (db) => {
-    await requireTerm(db, termId, { lock: true });
-    const { rows: rooms } = await db.query("SELECT id, room_type::text AS room_type FROM rooms WHERE id = ANY($1::uuid[])", [ids]);
+    const term = await requireTerm(db, termId, { lock: true });
+    const { rows: rooms } = await db.query(
+      "SELECT r.id, r.name, r.room_type::text AS room_type, f.building_id FROM rooms r JOIN floors f ON f.id = r.floor_id WHERE r.id = ANY($1::uuid[])",
+      [ids]
+    );
     const byId = new Map(rooms.map((r) => [r.id, r]));
     ids.forEach((id, i) => {
       if (!byId.has(id)) failField(single ? "room_id" : `room_ids.${i}`, "room not found");
     });
+    if (term.building_id) {
+      const wrong = rooms.filter((r) => r.building_id !== term.building_id);
+      if (wrong.length) {
+        throw roomWrongBuilding(
+          wrong.length === 1
+            ? `${wrong[0].name} is not in this term's building. Only rooms of the term's building can be used.`
+            : `${wrong.length} of these rooms are not in this term's building. Only rooms of the term's building can be used.`,
+          { room_ids: wrong.map((r) => r.id) }
+        );
+      }
+    }
     const { rows: existing } = await db.query("SELECT room_id FROM planner_term_rooms WHERE term_id = $1 AND room_id = ANY($2::uuid[])", [termId, ids]);
     if (single && existing.length) throw duplicate("This room is already in the term's room pool");
     const have = new Set(existing.map((r) => r.room_id));
