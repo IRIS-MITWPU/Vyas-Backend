@@ -474,7 +474,8 @@ async function seedPlannerTerm(client, buildingId) {
 // ----------------------------------------------------------------------
 const TEST_ADMIN = [
   { name: "Admin User", email: "admin@mitwpu.edu.in" },
-  { name: "Arnav", email: "1272261266.a@mitwpu.edu.in" },
+  { name: "Arnav Dev", email: "1272261266.a@mitwpu.edu.in" },
+  { name: "Aditya Mahamuni", email: "aditya.mahamuni1@mitwpu.edu.in" },
 ];
 const TEST_FACULTY = [
   { name: "Dr. Ramesh Sharma", email: "ramesh.sharma@mitwpu.edu.in" },
@@ -483,13 +484,15 @@ const TEST_FACULTY = [
 ];
 
 async function seedTestAccounts(client) {
-  await client.query(
-    `INSERT INTO profiles (full_name, email, is_admin, email_verified)
-     VALUES ($1, $2, TRUE, TRUE)
-     ON CONFLICT (email)
-     DO UPDATE SET full_name = EXCLUDED.full_name, is_admin = TRUE, email_verified = TRUE`,
-    [TEST_ADMIN.name, TEST_ADMIN.email],
-  );
+  for (const a of TEST_ADMIN) {
+    await client.query(
+      `INSERT INTO profiles (full_name, email, is_admin, email_verified)
+       VALUES ($1, $2, TRUE, TRUE)
+       ON CONFLICT (email)
+       DO UPDATE SET full_name = EXCLUDED.full_name, is_admin = TRUE, email_verified = TRUE`,
+      [a.name, a.email],
+    );
+  }
   for (const f of TEST_FACULTY) {
     await client.query(
       `INSERT INTO profiles (full_name, email, email_verified)
