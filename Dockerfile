@@ -14,7 +14,7 @@ WORKDIR /app
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends --only-upgrade \
-      gpgv libcap2 libgnutls30 libpam-modules libpam-modules-bin libpam-runtime libpam0g libpcre2-8-0 perl-base \
+      apt libapt-pkg6.0 gpgv libcap2 libgnutls30 libpam-modules libpam-modules-bin libpam-runtime libpam0g libpcre2-8-0 perl-base \
  && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node . .
